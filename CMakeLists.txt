@@ -187,6 +187,8 @@ foreach(src IN LISTS TESTFILES)
 endforeach()
 
 add_test(NAME test_qpeaks_regressions COMMAND test_qpeaks --regressions-only)
+add_test(NAME test_qpeaks_pt03 COMMAND test_qpeaks --legacy-pt03)
+add_test(NAME test_qpeaks_pt04 COMMAND test_qpeaks --legacy-pt04)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)

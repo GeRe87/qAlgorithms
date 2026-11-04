@@ -32,6 +32,7 @@ inline void default_assertion_handler(const char *assertion_as_cstring, const ch
     (void)vfprintf(stdout, format_string, argument_list);
     va_end(argument_list);
     putchar('\n'); // the format string will not contain a newline
+    fflush(stdout); // Preserve the failing assertion when a test runner captures output.
     /* set breakpoint here! */
     volatile int a = 3;
 #if defined(__i386__) || defined(__x86_64__)

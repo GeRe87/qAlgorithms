@@ -303,6 +303,46 @@ static void test_apex_grouping_more_than_128_candidates()
         assert(groups[i] == 0, "Candidate %zu was not assigned to the common group\n", i);
 }
 
+static void test_apex_grouping_order_and_reflection()
+{
+    // A overlaps B, B overlaps C; A does not overlap C. D is separate.
+    // Every permutation and its reflection must preserve this partition.
+    std::vector<RegressionGauss> original(4);
+    original[0].position = 4; original[0].span = {0, 6};
+    original[1].position = 6; original[1].span = {3, 6};
+    original[2].position = 8; original[2].span = {6, 6};
+    original[3].position = 20; original[3].span = {17, 7};
+    for (const bool reflected : {false, true})
+    {
+        std::vector<size_t> order = {0, 1, 2, 3};
+        do
+        {
+            std::vector<RegressionGauss> candidates;
+            for (const size_t index : order)
+            {
+                auto candidate = original[index];
+                if (reflected)
+                {
+                    candidate.position = 30 - candidate.position;
+                    candidate.span.startIdx = 31 - candidate.span.startIdx - candidate.span.length;
+                }
+                candidates.push_back(candidate);
+            }
+            int16_t groups[4];
+            assert(groupRegsByApex(&candidates, groups) == 2,
+                   "Connected windows must form two groups in every order", NULL);
+            for (size_t i = 0; i < 4; ++i)
+                for (size_t j = 0; j < 4; ++j)
+                    assert((groups[i] == groups[j]) == ((order[i] == 3) == (order[j] == 3)),
+                           "Apex partition changed under permutation/reflection", NULL);
+        } while (std::next_permutation(order.begin(), order.end()));
+    }
+    std::vector<RegressionGauss> singleton(1);
+    int16_t group = -1;
+    assert(groupRegsByApex(&singleton, &group) == 1 && group == 0,
+           "A singleton must receive a valid group ID", NULL);
+}
+
 static void test_linear_null_model_residuals()
 {
     // These residuals are orthogonal to both columns of the linear model:
@@ -629,10 +669,8 @@ static void test_close_maxima_share_one_selected_fit()
 
 static void test_known_reflected_three_peak_grouping()
 {
-    // Known full-pipeline failure, run explicitly with --known-reflection-failure.
-    // The original grouping heuristic calls a broad bridge fit stable after
-    // reflection, so the conflict resolver is not entered. Keep the correct
-    // three-peak count AND half-sample location expectations unchanged.
+    // Full-pipeline regression: preserve the original three-peak count and
+    // half-sample location expectations. Also callable independently.
     std::vector<float> y = synthetic_gaussians(51, {{14, 1000, 3}, {26, 700, 3}, {40, 100, 2}});
     std::reverse(y.begin(), y.end());
     check_synthetic_peak_selection("known_reflected_three_peak_grouping", y,
@@ -1017,10 +1055,17 @@ int main(int argc, const char *argv[])
         return 0;
     }
 
+    if (argc == 2 && std::strcmp(argv[1], "--legacy-pt03") == 0)
+        return test_qpeaks_find(&pt_03);
+    if (argc == 2 && std::strcmp(argv[1], "--legacy-pt04") == 0)
+        return test_qpeaks_find(&pt_04);
+
     test_apex_conversion_nonunit_spacing();
     test_weighted_mean_ignores_interpolated_values();
     test_peak_at_region_boundaries_and_cumulative_df();
     test_apex_grouping_more_than_128_candidates();
+    test_apex_grouping_order_and_reflection();
+    test_known_reflected_three_peak_grouping();
     test_features_follow_eic_retention_times();
     test_centroid_id_above_uint16();
     test_linear_null_model_residuals();

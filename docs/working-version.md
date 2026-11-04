@@ -17,8 +17,8 @@ representative real profile data is still blocked by ambiguous EIC peak
 selection. A diagnostic partial export is not a successful complete CLI run.
 
 The legacy qPeaks suite retains unresolved cases (`pt_04`, expected three peaks,
-and `pt_03`, expected no peaks). A separate reflected three-peak example also
-demonstrates an unresolved grouping error. The full test suite must therefore
+and `pt_03`, expected no peaks). The reflected three-peak grouping regression is now fixed and included in
+the regular numerical regressions. The full test suite must therefore
 still be reported as failing. Test expectations have not been relaxed.
 
 Unresolved apex groups now produce an explicit processing error. With
@@ -49,6 +49,62 @@ Missing observed support, missing separating valleys, and incompatible selected
 apices remain explicit errors. Statistical acceptance thresholds are unchanged.
 This is a bounded selection of peak descriptions, not quantitative deconvolution
 or proof that two reported features correspond to two chemical compounds.
+
+## Native Windows continuation, 2026-11-04
+
+Source baseline: `c00e415c4a0520f6a87cc1af27aaacad11a27818`.
+MSYS2 UCRT64 GCC 15.1.0, CMake 4.0.3, Ninja; default architecture flags.
+
+Apex grouping now computes connected components using pairwise apex proximity
+and overlapping fit windows. The old implementation kept the seed window fixed
+while expanding the apex range, so the partition depended on candidate order.
+A chain of overlapping windows is now checked in all 24 candidate permutations
+and both reflections, plus singleton assignment. The original full-pipeline
+reflection regression is included in the normal regression target and passes.
+Fit acceptance thresholds and explicit unresolved-conflict errors are unchanged.
+
+The vendored beta routines now use C++ `std::lgamma` for positive shape
+parameters; their unused sign output required unavailable `lgamma_r` on UCRT64.
+Test assertion output is flushed before the existing breakpoint trap, so captured
+Windows test logs retain the actual failing assertion.
+
+| Verification | Debug | Release |
+| --- | --- | --- |
+| Native configure/build | Pass | Pass |
+| Full CTest suite, including separate legacy diagnostics | 6/10 pass | 6/10 pass |
+| Numerical regressions including reflection/permutations | Pass | Pass |
+| Synthetic mzML CLI scenarios | 11/11 pass | 11/11 pass |
+| `pt_03`, expected zero peaks | FAIL: 2 | FAIL: 2 |
+| `pt_04`, expected three peaks | FAIL: 2 | FAIL: 2 |
+| `test_utils` exact beta-inverse equality | FAIL | FAIL |
+
+The four failing targets are `test_qpeaks`, `test_qpeaks_pt03`,
+`test_qpeaks_pt04`, and `test_utils`. Separate legacy targets ensure the first
+failure cannot hide the other case. No tests are disabled or expected to fail.
+On this Windows math library `incbi(0.5, 1, 0.5)` is
+`0.24999999999999989`, rather than bit-exact `0.25`. The original exact assertion
+is retained. A separate diagnostic checked 24 closed-form beta/inverse-beta
+values with absolute error below 1e-12; this does not make `test_utils` pass.
+
+Candidate-level inspection shows that `pt_04` has only two accepted fits before
+grouping. The fit around sample 3.27324 (zero-based) is rejected by the existing
+F-test; grouping cannot recover it. `pt_03` admits broad near-baseline fits and
+selects two features. Resolving these acceptance problems requires further
+statistical/model work rather than tuning thresholds to the two fixtures.
+
+The original real input `/mnt/data/230222_SFC_Modelling_MixF_01_20.mzML`
+is not present in this Windows session, and the referenced chat exposes no
+retrievable attachment. No real-file rerun, input hash, 715-scan count verification,
+complete positive/negative CSVs, or area validation was possible. The historical
+4,613/6,999 candidate counts and 772/785 failed EICs remain unverified partial
+results from the prior session. Do not present the synthetic CSVs as this sample.
+Irregular RT spacing and quantitative uncertainty remain unresolved as below.
+
+For writable temporary test files in PowerShell, set `TEMP` and `TMP` to an
+existing writable directory before CTest. The first attempt using the restricted
+system temporary directory failed with access denied; reruns in the workspace
+passed all 11 CLI scenarios. The historical Linux results below describe the
+baseline and are not a new Linux verification of these changes.
 
 ## Build
 
@@ -183,19 +239,16 @@ Expected peak counts and positions were fixed before evaluating the changes.
 Passing count/position checks does not establish quantitative accuracy: one
 weaker peak in a close synthetic pair still has about 13.1% area error.
 
-An additional known failure is directly reproducible:
+The formerly failing reflection example is also directly runnable:
 
 ```sh
 ./build/tests_bin/test_qpeaks --known-reflection-failure
 ```
 
-This intentionally failing diagnostic uses the complete processing path on a
-reflected analytic three-peak signal. The middle apex should be near 104.8 but
-is reported near 106.6778. The original pre-grouping classifies those groups as
-stable, so conflict refinement is never reached. Direct reflection checks of
-the new resolver pass; full-pipeline reflection invariance does not. This
-diagnostic is separate from the eight registered CTest targets and has not
-been marked as an expected success.
+This full-pipeline reflected three-peak regression now passes its original
+count and half-sample position requirements in native Windows Debug and Release.
+It is also executed by `test_qpeaks_regressions`; no expectation was relaxed.
+This establishes the specified regression, not universal reflection invariance.
 
 The Python integration test generates all its own inputs using a fixed random
 seed and standard-library XML, binary encoding and compression. It requires
@@ -239,12 +292,12 @@ mode and does not change the CLI's failure status.
 ## Next acceptance work
 
 1. Resolve ambiguous real-data EIC selection, the legacy `pt_03` / `pt_04`
-   cases, and the full-pipeline reflection failure without weakening expected
+   cases without weakening expected
    behavior or silently discarding ambiguous regions.
 2. Account for irregular retention-time spacing before validating areas,
    shapes and uncertainties quantitatively.
 3. Achieve a complete strict CLI run on representative profile mzML data;
    then compare feature locations and quantities with known signals or an
    agreed independent reference analysis.
-4. Validate the branch natively on Windows with the UCRT64 recipe, and measure
+4. Resolve the remaining native Windows test failures, and measure
    time and memory on successful realistic-file runs before broader use.

@@ -1,5 +1,6 @@
 #include "cephes.h"
 #include <cassert>
+#include <cmath>
 #include <math.h>
 
 namespace cephes
@@ -131,8 +132,9 @@ namespace cephes
         }
 
         /*Find the first part before the continued fraction.*/
-        int sign = 0;
-        const double lbeta_ab = lgamma_r(a, &sign) + lgamma_r(b, &sign) - lgamma_r(a + b, &sign);
+        // Modified for C++ portability: beta shape parameters are positive,
+        // so the gamma sign is positive and no sign output is needed.
+        const double lbeta_ab = std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
         const double front = exp(log(x) * a + log(1.0 - x) * b - lbeta_ab) / a;
 
         /*Use Lentz's algorithm to evaluate the continued fraction.*/
@@ -365,8 +367,7 @@ namespace cephes
             goto done;
         nflag = true;
         {
-            int sign = 0;
-            lgm = lgamma_r(a + b, &sign) - lgamma_r(a, &sign) - lgamma_r(b, &sign);
+            lgm = std::lgamma(a + b) - std::lgamma(a) - std::lgamma(b);
         }
 
         for (int i = 0; i < 8; i++)

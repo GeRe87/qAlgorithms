@@ -631,96 +631,46 @@ namespace qAlgorithms
     static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[])
     {
         const size_t length = validRegressions->size();
-
-        // One entry per candidate regression, not per final peak.
-        for (size_t i = 0; i < length; i++)
-            apexGroups[i] = -1;
-
-        if (length < 2)
-            return length;
-
-        // there must be a distance of at least 2 * minscale points between
-        // two apexes. This means a distance of three for the concrete implementation
-        // since we also count the two points on the edge of this region:
-        // X -- X -- X -- X is a distance of three (numeric) but covers four
-        // points of distance between apexes
-        const double min_apex_dist_d = 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON;
-
-        // assign apex groups
-        size_t assignments = 0;
-        int16_t currentGroup = 0;
-
-        size_t next_unassigned = 0;
-#define reg validRegressions->at(next_unassigned)
-
-        double currentApex = reg.position;
-        double apexLeftLim = currentApex - min_apex_dist_d;
-        double apexRightLim = currentApex + min_apex_dist_d;
-        int32_t outerStart = reg.span.startIdx;
-        int32_t outerLength = reg.span.length;
-        apexGroups[next_unassigned] = currentGroup;
-
-        // the assignments counter is incremented for every point that was assigned an apex group
-        while (assignments < length)
+        if (length == 0)
+            return 0;
+        std::fill(apexGroups, apexGroups + length, int16_t(-1));
+        const double resolution = 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON;
+        size_t groupCount = 0;
+        std::vector<size_t> pending;
+        for (size_t seed = 0; seed < length; ++seed)
         {
-            // the loop must iterate until we are certain that no further change will occur
-            bool hasChanged = true;
-            while (hasChanged)
+            if (apexGroups[seed] != -1)
+                continue;
+            if (groupCount >= INT16_MAX)
+                throw std::runtime_error("Too many apex groups in a single profile region.");
+            const int16_t group = (int16_t)groupCount++;
+            apexGroups[seed] = group;
+            pending.clear();
+            pending.push_back(seed);
+            // Connected components of pairwise proximity AND window overlap.
+            // Testing against a fixed seed window made membership depend on
+            // candidate order; expanded apex bounds could also bridge a gap
+            // using proximity and overlap from different candidates.
+            for (size_t next = 0; next < pending.size(); ++next)
             {
-                hasChanged = false;
-                // first pass: Assign regressions and update limits accordingly
-                for (size_t p = next_unassigned + 1; p < length; p++)
+                const RegressionGauss &member = validRegressions->at(pending[next]);
+                for (size_t i = 0; i < length; ++i)
                 {
-                    if (apexGroups[p] != -1)
+                    if (apexGroups[i] != -1)
                         continue;
-
-                    double secondApex = validRegressions->at(p).position;
-                    int32_t innerStart = validRegressions->at(p).span.startIdx;
-                    int32_t innerLength = validRegressions->at(p).span.length;
-                    // reasoning: while a distance of four points is the logically mandated distance, this is
-                    // preconditioned on both regions having any overlap. Here, one point matching in fit
-                    // region is not considered an overlap. To this end, we check that the defined region
-                    // for the tested regression overlaps to either side with the covered region so far.
-                    // By testing for the inner being enclosed or the outer being enclosed, we also test
-                    // for either region being fully enclosed in the other
-                    bool addToGroup = ((secondApex > apexLeftLim) && (secondApex < apexRightLim)) &&
-                                      (((innerStart <= outerStart) && (outerStart < innerStart + innerLength)) || // L_i ... L_o ... R_i ... R_o
-                                       ((outerStart <= innerStart) && (innerStart < outerStart + outerLength)));  // L_o ... L_i ... R_o ... R_i
-                    if (addToGroup)
+                    const RegressionGauss &candidate = validRegressions->at(i);
+                    const bool overlap =
+                        candidate.span.startIdx < member.span.startIdx + member.span.length &&
+                        member.span.startIdx < candidate.span.startIdx + candidate.span.length;
+                    if (overlap && std::abs(candidate.position - member.position) < resolution)
                     {
-                        apexGroups[p] = currentGroup;
-                        apexLeftLim = min(apexLeftLim, secondApex - min_apex_dist_d);
-                        apexRightLim = max(apexRightLim, secondApex + min_apex_dist_d);
-                        hasChanged = true;
-                        assignments += 1;
+                        apexGroups[i] = group;
+                        pending.push_back(i);
                     }
                 }
             }
-
-            // iterate through the data until the next unassigned value is found
-            for (; next_unassigned < length; next_unassigned++)
-            {
-                if (apexGroups[next_unassigned] == -1)
-                    break;
-            }
-            // break must be placed here to avoid bad array access
-            if (next_unassigned == length)
-                break;
-
-            assert((size_t)currentGroup < length);
-            if (currentGroup >= INT16_MAX - 1)
-                throw std::runtime_error("Too many apex groups in a single profile region.");
-            currentGroup += 1;
-            // @todo this is duplicated from function initialisation, macro?
-            currentApex = reg.position;
-            apexLeftLim = currentApex - min_apex_dist_d;
-            apexRightLim = currentApex + min_apex_dist_d;
-            outerStart = reg.span.startIdx;
-            outerLength = reg.span.length;
-            apexGroups[next_unassigned] = currentGroup;
         }
-#undef reg
-        return currentGroup + 1;
+        return groupCount;
     }
 
     // function that asserts that all regressions within one grouping describe only one apex
