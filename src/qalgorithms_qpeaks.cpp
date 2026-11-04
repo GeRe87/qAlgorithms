@@ -85,9 +85,11 @@ namespace qAlgorithms
         const float *predict,
         const size_t df_sum,
         const size_t length,
+        const double RSS_log,
         RegressionGauss *mutateReg);
 
     static void adjustRegression(RegressionGauss *reg, const float *x_values);
+    static double calcRSS_log(const RegressionGauss *mutateReg, const float *observed);
 
     // take a jacobian matrix as input and return the transpose at scale
     static double matProductReg(const double J[4], const size_t scale);
@@ -262,6 +264,10 @@ namespace qAlgorithms
                 presumed to be better when using the transformed coefficients in terms of applicability of the results.
                 This function also modifies the "predict" vector supplied as its argument!
             */
+            // Statistical tests use the log-domain fit. The raw-intensity
+            // height correction changes its intercept and is not a log-domain
+            // least-squares estimate; do not use that correction as log noise.
+            const double RSS_log = calcRSS_log(&reg, intensities_log);
             correctB0(intensities, span, predict.data(), &reg.coeffs);
 
             invalid failpoint = calcRegressionProperties(
@@ -271,6 +277,7 @@ namespace qAlgorithms
                 predict.data(),
                 df_sum,
                 length,
+                RSS_log,
                 &reg);
 
             validCount += failpoint == ok ? 1 : 0;
@@ -671,35 +678,62 @@ namespace qAlgorithms
             std::vector<size_t> members;
             for (size_t k = 0; k < choices.size(); ++k)
                 if (root(k) == component) members.push_back(k);
-            std::vector<double> lowerBound(members.size() + 1, 0);
-            for (size_t k = members.size(); k-- > 0;)
-                lowerBound[k] = lowerBound[k + 1] + choices[members[k]].front().first;
             double bestCost = INFINITY;
             std::vector<size_t> bestSelection;
             size_t visited = 0;
-            std::function<void(size_t, double)> search = [&](size_t k, double cost) {
+            std::vector<bool> assigned(members.size(), false);
+            std::function<void(size_t, double)> search = [&](size_t depth, double cost) {
                 if (++visited > 200000)
                     throw std::runtime_error("Joint apex selection exceeded its explicit search limit.");
-                if (cost + lowerBound[k] >= bestCost)
-                    return;
-                if (k == members.size())
+                if (depth == members.size())
                 {
-                    bestCost = cost;
-                    bestSelection = selected;
+                    if (cost < bestCost)
+                    {
+                        bestCost = cost;
+                        bestSelection = selected;
+                    }
                     return;
                 }
-                for (const auto &option : choices[members[k]])
+                double unconstrainedBound = cost;
+                for (size_t k = 0; k < members.size(); ++k)
+                    if (!assigned[k]) unconstrainedBound += choices[members[k]].front().first;
+                if (unconstrainedBound >= bestCost) return;
+                // Forward checking: each unassigned maximum must retain a
+                // compatible option. Its cheapest surviving option supplies
+                // an admissible error bound. Branch on the smallest domain,
+                // so constrained groups are not postponed behind broad ones.
+                double optimisticCost = cost;
+                size_t next = members.size();
+                std::vector<std::pair<double, size_t>> nextOptions;
+                for (size_t k = 0; k < members.size(); ++k)
                 {
-                    bool allowed = true;
-                    for (size_t other : selected)
-                        if (!compatible(option.second, other))
-                        { allowed = false; break; }
-                    if (!allowed)
-                        continue;
+                    if (assigned[k]) continue;
+                    std::vector<std::pair<double, size_t>> allowed;
+                    for (const auto &option : choices[members[k]])
+                    {
+                        bool feasible = true;
+                        for (size_t other : selected)
+                            if (!compatible(option.second, other))
+                            { feasible = false; break; }
+                        if (feasible) allowed.push_back(option);
+                    }
+                    if (allowed.empty()) return;
+                    optimisticCost += allowed.front().first;
+                    if (next == members.size() || allowed.size() < nextOptions.size())
+                    {
+                        next = k;
+                        nextOptions = std::move(allowed);
+                    }
+                }
+                if (optimisticCost >= bestCost) return;
+                assigned[next] = true;
+                for (const auto &option : nextOptions)
+                {
                     selected.push_back(option.second);
-                    search(k + 1, cost + option.first);
+                    search(depth + 1, cost + option.first);
                     selected.pop_back();
                 }
+                assigned[next] = false;
             };
             const size_t expected = selected.size() + members.size();
             search(0, 0);
@@ -1143,7 +1177,6 @@ namespace qAlgorithms
     /// @param mutateReg relevant regression
     /// @param observed log data
     /// @return RSS value
-    static double calcRSS_log(const RegressionGauss *mutateReg, const float *observed);
 
     /// @brief performs two F-tests against the log data. First H0 is the mean, second y = mx + b
     /// @param observed log data (or normal data, depends on the use case)
@@ -1170,6 +1203,7 @@ namespace qAlgorithms
         const float *predict,
         const size_t df_sum,
         const size_t length,
+        const double RSS_log,
         RegressionGauss *mutateReg)
     {
         assert(!mutateReg->isValid);
@@ -1201,10 +1235,8 @@ namespace qAlgorithms
         //     // return invalid_apexToEdge; // invalid apex to edge ratio // b0 independent
         // }
 
-        // @todo differentiate between tests performed in log and exp domain better
-        // everything involving the RSS is dependent on b0!
-        double RSS_log = calcRSS_log(mutateReg, intensities_log);
-        assert(RSS_log > 0);
+        // Residuals of the original log-domain fit, before raw-height correction.
+        assert(RSS_log >= 0);
         // double RSS_exp = calcRSS(predict->data(), intensities, &regSpan);
         // assert(RSS_exp > 0);
         // double mse_exp = RSS_exp / double(df_sum);
@@ -1276,7 +1308,7 @@ namespace qAlgorithms
             x += 1.0;
             RSS += difference * difference;
         }
-        assert(RSS > 0);
+        assert(RSS >= 0);
         return RSS;
     }
 
@@ -1310,7 +1342,7 @@ namespace qAlgorithms
     bool f_testRegression(const float *intensities_log, double RSS_reg_log, const Span_i32 range)
     {
         // during the tests, the RSS for the regression has already been calculated in calcRSS_log
-        assert(RSS_reg_log > 0);
+        assert(RSS_reg_log >= 0);
         const size_t length = range.length;
         /*
             The following code was initially intended to speed up the f test by performing a simple
@@ -1331,6 +1363,8 @@ namespace qAlgorithms
         // parameters. This also keeps zero null-model RSS out of F_value.
         if (RSS_H0_cf2 <= RSS_reg_log)
             return false;
+        if (RSS_reg_log == 0)
+            return true; // A perfect complex fit improves on a nonzero null residual.
         bool f_ok = F_test_regs(RSS_reg_log, RSS_H0_cf2, 4, 2, length, 0.05);
 
         return f_ok;
@@ -1373,8 +1407,10 @@ namespace qAlgorithms
         // zero without impacting the regression correctness. Significance here uses a
         // one-sided t-Test against zero.
 
-        assert(mse > 0);
+        assert(mse >= 0);
         double testCoeff = abs(coeffs->b1 < 0 ? coeffs->b2 : coeffs->b3); // absolute difference counts
+        if (mse == 0)
+            return testCoeff == 0; // Zero curvature cannot establish an apex.
         const double inv_E = qalgo_matInverse[coeffs->scale].E;
         double divisor = sqrt(inv_E * mse);
         double t_value = testCoeff / divisor; // test against mean 0
@@ -1853,7 +1889,7 @@ namespace qAlgorithms
         {
             return area_F * delta_x;
         }
-        assert(mse > 0);
+        assert(mse >= 0);
 
         {
             // We cannot directly calculate the uncertainty from the exponential form (true peak area).

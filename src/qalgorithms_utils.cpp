@@ -70,7 +70,7 @@ namespace qAlgorithms
         uint32_t dfn = params_complex - params_simple;
         uint32_t dfd = numPoints - params_complex;
         size_t key = hashm(dfn, dfd);
-        (alpha = 0.05); // @todo generalise for all alpha
+        if (alpha == 0.05) // Only this significance level belongs to this cache.
         {
             double Fhash = global_fhash_5perc[key];
             if (Fhash != 0) // this serves as a check for the key existing
@@ -95,7 +95,8 @@ namespace qAlgorithms
         assert(float(F) == float(F_old));
 #endif
 
-        global_fhash_5perc[key] = F;
+        if (alpha == 0.05)
+            global_fhash_5perc[key] = F;
 
         return F;
     }

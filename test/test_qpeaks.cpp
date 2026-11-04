@@ -423,6 +423,119 @@ static void test_joint_selection_keeps_both_supported_maxima()
 
 }
 
+static void test_log_fit_acceptance_precedes_height_correction()
+{
+    // This residual is orthogonal to all four design columns on [-2,2].
+    // Its exact log-domain RSS is 70*e^2. The nested linear RSS adds 14*a^2.
+    // Hence F=a^2/(10*e^2)=202.906..., above F(2,1;0.95)=199.5.
+    // Raw-height correction is not an OLS log intercept and must not inflate
+    // that residual or make this statistically accepted peak disappear.
+    const double a = 0.5, e = 0.0111;
+    const double residual[] = {1,-4,6,-4,1};
+    std::vector<float> x(5), y(5), logs(5);
+    for (size_t i = 0; i < 5; ++i)
+    {
+        x[i] = float(i);
+        y[i] = float(1000 * std::exp(-a * (double(i)-2)*(double(i)-2) + e*residual[i]));
+        logs[i] = std::log(y[i]);
+    }
+    std::vector<RegCoeffs> coefficients;
+    findCoefficients(logs.data(), 5, &coefficients);
+    assert(coefficients.size() == 1, "Five points must yield one four-coefficient fit", NULL);
+    RegressionGauss original;
+    original.coeffs = coefficients.front(); original.span = {0,5};
+    const double rss = calcRSS_log(&original, logs.data());
+    assert(std::abs(rss - 70*e*e) < 1e-6, "Log residual must match its independent orthogonal construction", NULL);
+    assert(f_testRegression(logs.data(), rss, original.span), "The unchanged F test must accept the original log fit", NULL);
+    std::vector<float> prediction(5);
+    correctB0(y.data(), original.span, prediction.data(), &original.coeffs);
+    assert(calcRSS_log(&original, logs.data()) > rss,
+           "Fixture must distinguish raw-height correction from OLS log residual", NULL);
+    std::vector<RegressionGauss> peaks;
+    assert(qpeaks_find(y.data(), x.data(), nullptr, 5, &peaks) == 1,
+           "Height correction must not overturn acceptance of this log-domain fit", NULL);
+}
+
+static void test_f_threshold_respects_significance_level()
+{
+    // F(2,1) has survival probability 1/sqrt(1+2F), so the
+    // upper-tail alpha quantile is exactly (1/alpha^2 - 1)/2.
+    // Repeated 0.05 calls bracket other levels to exercise cache isolation.
+    for (const double alpha : {0.05, 0.1, 0.01, 0.05})
+    {
+        const double expected = (1/(alpha*alpha)-1)/2;
+        const double actual = F_stat(alpha, 4, 2, 5);
+        assert(std::abs(actual-expected) < 1e-6,
+               "F threshold must use the requested alpha: %.9g versus %.9g", actual, expected);
+    }
+}
+
+static void test_joint_search_propagates_constraints_without_dropping_groups()
+{
+    const std::vector<float> y = {5,10,50,100,50,45,90,45,40,80,40,10,5};
+    std::vector<RegressionGauss> candidates;
+    for (size_t group = 0; group < 3; ++group)
+        for (const double offset : {-0.5, 0.0, 0.5})
+        {
+            const double position = 3 + 3*double(group) + offset;
+            RegressionGauss reg;
+            reg.position = float(position);
+            reg.span = {0,13}; reg.coeffs.scale = 6; reg.coeffs.x0 = 6;
+            reg.coeffs.b0 = std::log(100-10*double(group)) - 0.2*(position-6)*(position-6);
+            reg.coeffs.b1 = 0.4*(position-6);
+            reg.coeffs.b2 = reg.coeffs.b3 = -0.2;
+            candidates.push_back(reg);
+        }
+    const auto original = candidates;
+    std::vector<int16_t> groups(candidates.size(), 0);
+    const std::vector<bool> conflicting = {true};
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting);
+    std::vector<float> selected;
+    for (const auto &reg : candidates) if (reg.isValid) selected.push_back(reg.position);
+    std::sort(selected.begin(), selected.end());
+    // Enumerating the 3^3 alternatives under strict >3 separation leaves
+    // exactly this combination. Per-maximum greedy choices cannot guarantee it.
+    assert(selected == std::vector<float>({2.5F,6,9.5F}),
+           "Joint search must find the unique feasible three-group assignment", NULL);
+    candidates = original;
+    candidates.erase(candidates.begin()); // Remove the sole feasible left option.
+    groups.assign(candidates.size(), 0);
+    bool rejected = false;
+    try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting); }
+    catch (const std::runtime_error &error)
+    { rejected = std::string(error.what()).find("No compatible accepted fits") != std::string::npos; }
+    assert(rejected, "An infeasible assignment must fail instead of discarding a maximum", NULL);
+
+    // Duplicating alternatives does not change feasibility. A fixed left-to-
+    // right search visits over 200,000 states before proving this impossible.
+    // The single right option constrains all middle choices immediately.
+    candidates.clear();
+    for (const size_t i : {1,2,3,4,5})
+        for (size_t copy = 0; copy < 500; ++copy) candidates.push_back(original[i]);
+    candidates.push_back(original[8]);
+    groups.assign(candidates.size(), 0);
+    rejected = false;
+    try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting); }
+    catch (const std::runtime_error &error)
+    { rejected = std::string(error.what()).find("No compatible accepted fits") != std::string::npos; }
+    assert(rejected, "Constraint propagation must prove infeasibility within the unchanged search budget", NULL);
+}
+
+static void test_exact_log_fit_allows_zero_residual()
+{
+    RegressionGauss reg;
+    reg.coeffs.b0 = 8; reg.coeffs.b1 = 0; reg.coeffs.b2 = reg.coeffs.b3 = -1;
+    reg.coeffs.x0 = 2; reg.coeffs.scale = 2; reg.span = {0,5};
+    const float logPeak[] = {4,7,8,7,4};
+    const float logLine[] = {4,5,6,7,8};
+    assert(calcRSS_log(&reg, logPeak) == 0, "An exact log fit has zero residual", NULL);
+    assert(f_testRegression(logPeak, 0, reg.span), "Exact peak must improve on a non-exact line", NULL);
+    assert(!f_testRegression(logLine, 0, reg.span), "An exact line cannot justify extra parameters", NULL);
+    assert(!insignificantCoefficient(&reg.coeffs, 0, 1), "Nonzero curvature with zero residual remains defined", NULL);
+    reg.coeffs.b2 = reg.coeffs.b3 = 0;
+    assert(insignificantCoefficient(&reg.coeffs, 0, 1), "Zero curvature does not define a peak", NULL);
+}
+
 static void test_linear_null_model_residuals()
 {
     // These residuals are orthogonal to both columns of the linear model:
@@ -1151,6 +1264,10 @@ int main(int argc, const char *argv[])
     test_features_follow_eic_retention_times();
     test_centroid_id_above_uint16();
     test_linear_null_model_residuals();
+    test_log_fit_acceptance_precedes_height_correction();
+    test_exact_log_fit_allows_zero_residual();
+    test_f_threshold_respects_significance_level();
+    test_joint_search_propagates_constraints_without_dropping_groups();
     test_analytic_peak_conflicts();
     test_conflict_preserves_stable_neighbor();
     test_flat_maximum_is_one_group();

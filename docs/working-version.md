@@ -50,6 +50,80 @@ apices remain explicit errors. Statistical acceptance thresholds are unchanged.
 This is a bounded selection of peak descriptions, not quantitative deconvolution
 or proof that two reported features correspond to two chemical compounds.
 
+## Statistical-cascade audit continuation
+
+Retain the equidistant sample-index regression, its precomputed matrices, and
+existing RT/area transformation. RT interpolation and area corrections are
+explicitly deferred by the user.
+
+Two concrete implementation errors are corrected without changing the cascade's
+0.05 significance level:
+
+- Log-domain residuals are captured from the original fitted coefficients,
+  before the raw-intensity height correction changes the intercept. The latter
+  optimises a different error measure and must not be treated as log-fit noise.
+- `F_stat` no longer overwrites the requested alpha with 0.05. Its existing
+  0.05 cache is used only for that level; other levels use their own calculation.
+
+Exact zero log residuals are valid. A perfect complex fit is accepted against a
+nonzero linear residual, while an equally exact line cannot justify additional
+parameters. Zero-curvature/zero-residual candidates remain insignificant. No
+artificial noise floor is introduced. The existing uncertainty calculation now
+also permits a zero MSE; no area formula or RT correction is added.
+
+Independent regression checks use a five-point residual orthogonal to all four
+design columns: [1,-4,6,-4,1]*0.0111 on a quadratic log peak of curvature -0.5.
+The exact RSS is 70*0.0111^2 and F is 202.9056..., above the unchanged 199.5
+threshold. The previous height-corrected residual rejected this fixture.
+Additional tests use the closed-form F(2,1) upper-tail quantile
+(1/alpha^2-1)/2 for alpha 0.1, 0.05 and 0.01, including cache isolation.
+
+Joint selection now forward-checks surviving alternatives, computes an
+admissible compatible-error bound, and branches on the smallest remaining
+domain. The existing unconstrained error bound is retained as a cheap initial
+prune. Its objective, compatibility rules and explicit 200,000-state limit
+are unchanged. A three-group test has exactly one feasible assignment among
+27 combinations (apices 2.5,6,9.5). Removing its sole feasible left alternative
+must raise an explicit infeasibility error rather than omit a group.
+
+The original pt_03 and pt_04 expectations remain failing (2 instead of 0, and
+2 instead of 3). The pt_04 candidate at center 3/scale 2 has original log RSS
+0.0816954180, null RSS 16.8265746760, F=102.4835888111, and F-critical=199.5.
+Its curvature test passes, but the unchanged F test rejects it. Lowering that
+threshold simply to obtain the legacy count is not a verified correction.
+The prior raw-height-corrected RSS was 0.1533269169. A candidate-level CSV audit
+is supplied locally. Broad/background detections, statistical calibration over
+many tested windows, and the covariance treatment of clipped fitting windows
+remain unresolved; this is not complete validation of the cascade.
+
+The current strict CLI still exits nonzero in the positive polarity at EIC 119
+with no compatible accepted descriptions for all supported maxima. EIC IDs
+cannot be compared directly with earlier revisions because the changed
+acceptance already changes centroid and bin construction. Current complete
+centroid-only processing succeeds: 579,351 positive and 608,532 negative
+centroids over 715 scans per polarity. Debug/Release centroid CSVs are byte-equal.
+
+The complete Release diagnostic retains 5,090 positive PARTIAL feature candidates
+from 7,017 EICs (688 fail), and 8,099 negative candidates from 9,490 EICs
+(638 fail). All output numeric fields are finite, areas/heights positive,
+feature IDs unique, RTs sorted, bounds consistent with observations, and no
+feature refers to a failed EIC. Failures are positive 541 infeasible/100
+search-limit/47 missing-valley, negative 509/90/39 respectively. The diagnostic
+iteration completed in 1,026.061 seconds including raw-EIC CSV output. This is
+not a successful strict feature run or a speedup claim; the input to binning
+and the accepted candidate sets differ from earlier revisions. The diagnostic's
+inherited exit zero and success line refer only to its iteration, not completeness.
+The full real-feature diagnostic was run in Release; Debug verification covers
+the full test suite, centroiding and strict first-failure path, not all EICs.
+
+The search-budget control uses 2,501 descriptions of an infeasible three-maximum
+system. The old fixed order hits the unchanged 200,000-state limit; forward
+checking proves infeasibility. A controlled single execution took 2.62 seconds
+old versus 0.06 new. This does not establish a general real-data runtime gain.
+The full native Debug and Release suites still pass 6/10 targets, including all
+numerical regressions and the 11 synthetic CLI scenarios. The four original
+failing targets remain failing with their original assertions.
+
 ## Joint fit selection continuation
 
 Independently minimising fit error for each supported maximum can select
