@@ -1,0 +1,168 @@
+# mzML feature-list working branch
+
+Branch: `work/mzml-featurelists` in `GeRe87/qAlgorithms`.
+Starting commit: `ceec9eb6459253660a17caf5f80909f8f3ab143a`.
+
+## Purpose and status
+
+This branch establishes a reproducible command-line workflow from LC-HRMS
+MS1 profile mzML to per-file feature CSVs. It is an experimental engineering
+baseline. It is not a scientifically validated release.
+
+The complete synthetic workflow detects the two known signals at their expected
+m/z and retention time in positive, negative, and mixed-polarity files. The
+legacy qPeaks suite still exposes unresolved overlapping-apex cases (`pt_04`,
+expected three peaks, and `pt_03`, expected no peaks). The full test suite must
+therefore still be reported as failing. Test expectations have not been relaxed.
+
+Unresolved apex groups now produce an explicit processing error. With
+`--skip-error`, subsequent files are still processed and the batch returns a
+nonzero status. These difficult profiles must be resolved before treating this
+branch as a general-purpose working release.
+
+## Build
+
+Use a C++17 GCC toolchain, CMake, and the zlib development library. Python 3 is
+needed for the generated mzML integration test. Vendored C++ dependencies are
+included in the repository. The initial Linux build uses GCC 13.3 and zlib 1.3.
+
+```sh
+git clone --branch work/mzml-featurelists https://github.com/GeRe87/qAlgorithms.git
+cd qAlgorithms
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel 2
+ctest --test-dir build --output-on-failure
+```
+
+The final command includes the unresolved legacy test described above. To run
+the new numerical regressions and complete mzML smoke test separately:
+
+```sh
+ctest --test-dir build --output-on-failure -R "test_qpeaks_regressions|test_mzml_cli"
+```
+
+Debug and Release configurations are respected. CPU-specific compilation is
+opt-in (`-DQALGORITHMS_NATIVE_ARCH=ON`); the default build does not use
+`-march=native`. Standard zlib is the default. Native zlib-ng can be selected
+explicitly with `-DQALGORITHMS_USE_ZLIB_NG=ON` when its CMake package is installed.
+
+### Windows build recipe
+
+Use the **MSYS2 UCRT64** environment consistently. The following packages belong
+to the same environment:
+
+```sh
+pacman -S --needed git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-python
+```
+
+Then run the clone and CMake commands above in that UCRT64 shell, adding
+`-G Ninja` to the CMake configuration command. There is no hard-coded MSYS2
+installation path in the build anymore. This recipe still needs a native
+Windows validation run; it is not evidence of a completed Windows test.
+
+The resulting executable is `build/qAlgorithms.exe`. Run it in the UCRT64 shell,
+which supplies the runtime DLL path. For a PowerShell session with the default
+MSYS2 installation, set the path for that session first:
+
+```powershell
+$env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
+.\build\qAlgorithms.exe -i "C:\Data\sample.mzML" -o "C:\Data\features" --printfeatures
+```
+
+## Process data
+
+```sh
+./build/qAlgorithms -i "/data/sample.mzML" -o "/data/features" --printfeatures
+./build/qAlgorithms -i "/data/samples" -o "/data/features" --printfeatures
+```
+
+Input directories are searched recursively. The mzML extension is matched
+without case sensitivity. Repeated paths are deduplicated; distinct named
+samples are retained even when their byte content is identical. Output
+directories are created as needed. Supplying `-i` and `-o` without an output
+flag defaults to feature CSV. The older `-printfeatures` spelling and `-pf`
+remain accepted.
+
+`--printall` additionally writes centroid and bin CSVs. `--skip-existing`
+preserves existing outputs. Use a fresh output directory for a new analysis;
+without that flag, existing matching output files can be replaced. Distinct
+inputs that would produce the same output filename are rejected. A mixed
+polarity file writes separate positive and negative results.
+
+| Input | Feature output |
+| --- | --- |
+| Single-polarity `sample.mzML` | `sample_features.csv` |
+| Mixed-polarity `sample.mzML` | `sample_positive_features.csv`, `sample_negative_features.csv` |
+
+The feature CSV contains ID, bin ID, m/z, m/z uncertainty, retention time,
+retention-time uncertainty, RT bounds, area, area uncertainty, height, height
+uncertainty, scale, quality fields, and regression coefficients. Retention
+times are in seconds. **DQSB is still the upstream placeholder `-1`; do not
+interpret it as a computed bin quality score.**
+
+A valid profile input without detected features writes a header-only CSV and
+returns success. Malformed input, unsupported input, unresolved apex groups,
+or failure to write the feature CSV returns a nonzero status. Under
+`--skip-error`, any failed file still makes the final batch status nonzero.
+A later failure in a mixed-polarity file may leave an already completed CSV
+from its first polarity; a nonzero run must not be treated as complete.
+
+## Supported input and limits
+
+- MS1 **profile** spectra, positive, negative, or interleaved polarity.
+- Plain `mzML` and `indexedmzML` with ordinary mzML XML element names.
+- 32-bit and 64-bit floating-point binary arrays, selected separately for m/z
+  and intensity, with zlib or no compression. Array order is determined by CV
+  accession; shared referenceable parameter groups are supported.
+- Scan start times in seconds or minutes; selected scans must have strictly
+  increasing retention times.
+- Centroid-only input and MS2-only input are rejected. MS2 processing, MS-Numpress,
+  cross-sample feature alignment, compound identification and deconvolution
+  are outside this working baseline.
+- Current internal index widths limit one polarity to 65,535 selected MS1 scans
+  and a contiguous above-threshold profile region to 65,535 points. Larger
+  inputs are rejected explicitly instead of wrapping indices.
+
+## Reproducible verification
+
+Verified on 2026-11-04 on Linux x86-64 with GCC 13.3, CMake 4.4.4 and
+system zlib 1.3:
+
+| Check | Debug | Release |
+| --- | --- | --- |
+| Configure and build | Pass | Pass |
+| Full CTest suite | 7 of 8 targets pass | 7 of 8 targets pass |
+| Generated mzML/CLI integration scenarios | 11 of 11 pass | 11 of 11 pass |
+| New qPeaks coordinate, indexing and weighting regressions | Pass | Pass |
+
+The integration scenarios are grouped in the single `test_mzml_cli` CTest
+target. The sole failing target is the retained legacy `test_qpeaks` suite,
+which encounters the unresolved apex-conflict error described above. It has
+not been disabled or marked as an expected success. The full CTest command
+therefore returns a failure status in both configurations.
+
+The Python integration test generates all its own inputs using a fixed random
+seed and standard-library XML, binary encoding and compression. It requires
+known peaks near m/z 100.125 / 150.375 and RT 22.25 / 31.4 seconds for positive
+mode, with distinct negative-mode coordinates. All numeric CSV values must be
+finite and detected peak areas/heights positive. It also covers valid profiles
+without detected peaks, unsupported spectra, malformed data, missing option
+values, output-name collisions, batch error handling and default CSV output.
+
+```sh
+python3 test/integration/test_mzml_cli.py ./build/qAlgorithms --work-dir ./smoke-evidence
+```
+
+With `--work-dir`, generated mzML inputs, feature CSVs and process logs are
+retained. Without it, successful temporary runs are cleaned up. This is an
+engineering test of the processing chain, not a validation of analytical
+accuracy, detection limits, false-positive rates or uncertainty estimates.
+
+## Next acceptance work
+
+1. Resolve the legacy `pt_03` and `pt_04` apex-conflict cases without weakening
+   their expected behavior or silently discarding ambiguous regions.
+2. Validate the branch natively on Windows with the UCRT64 recipe.
+3. Run a representative real profile mzML and compare the generated feature
+   list against known signals and an agreed reference analysis.
+4. Measure processing time and memory on realistic files before broader use.

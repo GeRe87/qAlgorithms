@@ -7,14 +7,19 @@
 
 // #include <filesystem>
 #include <cassert>
+#include <cerrno>
+#include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
-//  problems linking against zlib-ng with mingw under windows, use this bypass until a proper solution is required
-#if __has_include(<zlib-ng.h>)
+// CMake selects both the header and the matching compression library.
+#ifdef QALGORITHMS_USE_ZLIB_NG
     #include <zlib-ng.h>
 #else
     #include <zlib.h>
@@ -37,40 +42,98 @@ inline int32_t zng_compress(uint8_t *dest, size_t *destLen, const uint8_t *sourc
     return z_ret;
 }
 #endif
-// since we care mostly about speed, we want to use the generally faster zlib-ng for decompression.
-// However, we cannot be sure that it exists for a given system. Therefore, it is only included if
-// it can be installed for the host
+// The standard zlib API is the portable default; native zlib-ng is optional.
 
 namespace qAlgorithms
 {
     static bool isCentroided_fun(const XML_File *file);
 
+    static bool read_size(const char *text, size_t *value)
+    {
+        if (!text || !*text)
+            return false;
+        const char *end = text + std::strlen(text);
+        const auto parsed = std::from_chars(text, end, *value);
+        return parsed.ec == std::errc() && parsed.ptr == end;
+    }
+
+    static pugi::xml_node spectrum_node(const XML_File *file, const size_t index)
+    {
+        if (!file || file->defective || !file->linknodes || index >= file->linknodes->size())
+            return {};
+        return file->linknodes->at(index);
+    }
+
+    // CV names are descriptive text; the accession is the stable identifier.
+    // mzML also permits these parameters to be supplied by a shared group.
+    static pugi::xml_node cv_param(const pugi::xml_node &node, const char *accession)
+    {
+        pugi::xml_node param = node.find_child_by_attribute("cvParam", "accession", accession);
+        if (param)
+            return param;
+        pugi::xml_node root = node.root().child("mzML");
+        if (!root)
+            root = node.root().child("indexedmzML").child("mzML");
+        for (pugi::xml_node ref : node.children("referenceableParamGroupRef"))
+        {
+            const pugi::xml_node group = root.child("referenceableParamGroupList")
+                                             .find_child_by_attribute("referenceableParamGroup", "id",
+                                                                      ref.attribute("ref").value());
+            param = group.find_child_by_attribute("cvParam", "accession", accession);
+            if (param)
+                return param;
+        }
+        return {};
+    }
+
+    static bool binary_encoding(const pugi::xml_node &array, bool *compressed, bool *f64)
+    {
+        const bool is_compressed = bool(cv_param(array, "MS:1000574"));
+        const bool is_uncompressed = bool(cv_param(array, "MS:1000576"));
+        const bool is_double = bool(cv_param(array, "MS:1000523"));
+        const bool is_float = bool(cv_param(array, "MS:1000521"));
+        if (is_compressed == is_uncompressed || is_double == is_float ||
+            cv_param(array, "MS:1002312") || cv_param(array, "MS:1002313") || cv_param(array, "MS:1002314"))
+            return false;
+        *compressed = is_compressed;
+        *f64 = is_double;
+        return true;
+    }
+
     static Polarities get_polarity_mode(const XML_File *file)
     {
-        const size_t count = file->linknodes->size();
-        assert(count > 1);
-
-        Polarities polarity_prev = spectrum_polarity(file, 0);
-        for (size_t specNum = 1; specNum < count; ++specNum)
+        Polarities mode = Polarities::unknown_polarity;
+        for (size_t specNum = 0; specNum < file->linknodes->size(); ++specNum)
         {
-            Polarities polarity = spectrum_polarity(file, specNum);
-            if (polarity != polarity_prev)
+            if (spectrum_ms_level(file, specNum) != 1 ||
+                (!file->isCentroided && !spectrum_is_profile(file, specNum)))
+                continue;
+            const Polarities polarity = spectrum_polarity(file, specNum);
+            if (polarity == Polarities::unknown_polarity)
+                return polarity;
+            if (mode == Polarities::unknown_polarity)
+                mode = polarity;
+            else if (polarity != mode)
                 return Polarities::mixed;
         }
-        return polarity_prev;
+        return mode;
     };
 
     XML_File::XML_File(const path_char *file, const SourceFileType type)
     {
         filetype = type;
-        assert(filetype == mzML);
+        if (filetype != mzML)
+        {
+            defective = true;
+            (void)fprintf(stderr, "Error: only mzML input is supported.\n");
+            return;
+        }
 
         pugi::xml_parse_result loading_result = mzml_base_document.load_file(file);
 
         if (loading_result)
         {
             mzml_root_node = mzml_base_document.document_element();
-            assert(mzml_root_node);
         }
         else
         {
@@ -80,133 +143,145 @@ namespace qAlgorithms
             return;
         }
 
-        // traverse the xml tree while ensuring that failure occurs at the first possible moment
-        assert(std::strcmp("indexedmzML", mzml_root_node.name()) == 0);
-        mzml_root_node = mzml_root_node.first_child();
-        assert(std::strcmp("mzML", mzml_root_node.name()) == 0);
-
-        // qAlgorithms is not designed to process data which consists of more than one sample
-        volatile bool sampleListExists = !mzml_root_node.child("sampleList").empty();
-        volatile bool sourceFileListExists = !mzml_root_node.child("fileDescription").child("sourceFileList").empty();
-        if (sampleListExists)
-        {
-            if (mzml_root_node.child("sampleList").attribute("count").value()[0] != '1')
-            {
-                // assert();
-                //@todo check for expected conversion tool use
-            }
-        }
-        if (sourceFileListExists)
-        {
-            //@todo see above
-        }
-        if (!(sampleListExists || sourceFileListExists))
+        if (std::strcmp(mzml_root_node.name(), "indexedmzML") == 0)
+            mzml_root_node = mzml_root_node.child("mzML");
+        if (std::strcmp(mzml_root_node.name(), "mzML") != 0)
         {
             defective = true;
-            (void)fprintf(stderr, "Error: the supplied mzML file contains more than one sample.\n"
-                                  "This probably means that a file containing intermediate (aggregated) results is\n"
-                                  "supplied instead of raw data. If the file is correct, inspect the conversion pipeline.\n");
+            (void)fprintf(stderr, "Error: expected an mzML document, optionally wrapped in indexedmzML.\n");
             return;
         }
 
-        assert(mzml_root_node.child("run"));
-
         pugi::xml_node spec_list = mzml_root_node.child("run").child("spectrumList");
-        assert(spec_list);
-
-        bool fail = false;
-        number_spectra = parse_uint64(spec_list.attribute("count").value(), &fail);
-        assert(!fail);
-
-        if (number_spectra == 0)
+        size_t declared_count = 0;
+        if (!spec_list || !read_size(spec_list.attribute("count").value(), &declared_count) ||
+            declared_count > std::numeric_limits<uint32_t>::max())
+        {
+            defective = true;
+            (void)fprintf(stderr, "Error: missing spectrumList or invalid spectrum count in mzML.\n");
+            return;
+        }
+        if (declared_count == 0)
         {
             defective = true;
             (void)fprintf(stderr, "Error: the supplied mzML file does not contain any spectra.\n");
             return;
         }
 
-        linknodes = new std::vector<pugi::xml_node>(number_spectra);
-        linknodes->clear();
-        for (pugi::xml_node child = spec_list.first_child(); (bool)child; child = child.next_sibling())
+        // Do not allocate an input-supplied count before checking the actual nodes.
+        linknodes = new std::vector<pugi::xml_node>;
+        for (pugi::xml_node child : spec_list.children("spectrum"))
         {
             linknodes->push_back(child);
         }
-        assert(linknodes->size() == number_spectra);
+        if (linknodes->size() != declared_count)
+        {
+            defective = true;
+            (void)fprintf(stderr, "Error: spectrumList count does not match the number of spectra.\n");
+            return;
+        }
+        number_spectra = static_cast<uint32_t>(declared_count);
 
-        zlib_compression = spectrum_is_compressed(this, 0);
-
-        precision_f64 = spectrum_is_float64(this, 0);
+        for (size_t index = 0; index < number_spectra; ++index)
+        {
+            const uint32_t level = spectrum_ms_level(this, index);
+            const pugi::xml_node spec = linknodes->at(index);
+            size_t array_length = 0;
+            if (level == 0 || !read_size(spec.attribute("defaultArrayLength").value(), &array_length))
+            {
+                defective = true;
+                (void)fprintf(stderr, "Error: spectrum %zu has an invalid MS level or array length.\n", index);
+                return;
+            }
+            if (level == 1)
+            {
+                const bool profile = bool(cv_param(spec, "MS:1000128"));
+                const bool centroid = bool(cv_param(spec, "MS:1000127"));
+                if (profile == centroid || spectrum_polarity(this, index) == Polarities::unknown_polarity ||
+                    !std::isfinite(spectrum_rt(this, index)))
+                {
+                    defective = true;
+                    (void)fprintf(stderr, "Error: MS1 spectrum %zu needs a valid spectrum type, polarity and scan start time.\n", index);
+                    return;
+                }
+            }
+        }
 
         isCentroided = isCentroided_fun(this);
-
         polarityMode = get_polarity_mode(this);
-        assert(polarityMode != Polarities::unknown_polarity);
+        if (polarityMode == Polarities::unknown_polarity)
+        {
+            defective = true;
+            (void)fprintf(stderr, "Error: no MS1 spectra with a known polarity were found.\n");
+            return;
+        }
+        zlib_compression = spectrum_is_compressed(this, 0);
+        precision_f64 = spectrum_is_float64(this, 0);
     };
+
+    XML_File::~XML_File()
+    {
+        delete linknodes;
+    }
 
     void XML_File::free_linknodes()
     {
         delete linknodes;
+        linknodes = nullptr;
         defective = true;
     };
 
     static int32_t decodeSpectrum(const char *const binaryData,
+                                  const size_t encodedLength,
                                   std::vector<float> *spectrum,
                                   const size_t finalSize,
                                   bool compression, bool f64)
     {
-        // @todo work directly with the char stream
-        std::vector<char> decoded_string = decode_base64(binaryData,
-                                                         strlen(binaryData));
+        spectrum->clear();
+        const size_t element_size = f64 ? sizeof(double) : sizeof(float);
+        if (finalSize > spectrum->max_size() || finalSize > std::numeric_limits<size_t>::max() / element_size)
+            return 1;
+        if (finalSize == 0)
+            return encodedLength == 0 ? 0 : 1;
+        const size_t expected_bytes = finalSize * element_size;
+        std::vector<char> decoded_string = decode_base64(binaryData, encodedLength);
         if (decoded_string.empty())
             return 1;
-
-        spectrum->resize(finalSize); // as per standard, the uncompressed size of the spectrum must be known
-
-        if (f64)
+        if (compression)
         {
-            if (compression)
-            {
-                // The final spectrum is of type float, but often the encoding will be double.
-                // In these cases, we need a separate buffer to write into.
-                std::vector<double> buffer(finalSize);
-                size_t bufferSize = finalSize * sizeof(double);
-
-                zng_uncompress((uint8_t *)buffer.data(), &bufferSize,
-                               (uint8_t *)decoded_string.data(), decoded_string.size());
-                assert(bufferSize == finalSize * sizeof(double));
-
-                // copy values into spectrum
-                float *spec = spectrum->data();
-                for (size_t i = 0; i < finalSize; i++)
-                    spec[i] = (float)buffer[i];
-            }
-            else
-            {
-                // the decoded buffer is already an array of doubles and can be reinterpreted as such
-                assert(decoded_string.size() % sizeof(double) == 0);
-                // cppcheck-suppress invalidPointerCast
-                const double *buffer = (double *)decoded_string.data(); // NOLINT
-                float *spec = spectrum->data();
-                for (size_t i = 0; i < finalSize; i++)
-                    spec[i] = (float)buffer[i];
-            }
+            std::vector<char> buffer(expected_bytes);
+            size_t buffer_size = buffer.size();
+            const int32_t status = zng_uncompress(reinterpret_cast<uint8_t *>(buffer.data()), &buffer_size,
+                                                   reinterpret_cast<const uint8_t *>(decoded_string.data()),
+                                                   decoded_string.size());
+            if (status != Z_OK || buffer_size != expected_bytes)
+                return 2;
+            decoded_string.swap(buffer);
         }
-        else
+        else if (decoded_string.size() != expected_bytes)
         {
-            if (compression)
-            {
-                // no buffer needed, write directly into the spectrum
-                size_t bufferSize = finalSize * sizeof(float);
+            return 3;
+        }
 
-                zng_uncompress((uint8_t *)spectrum->data(), &bufferSize,
-                               (uint8_t *)decoded_string.data(), decoded_string.size());
-                assert(bufferSize == finalSize * sizeof(float));
-            }
+        spectrum->resize(finalSize);
+        for (size_t index = 0; index < finalSize; ++index)
+        {
+            // memcpy avoids alignment and aliasing assumptions about the byte buffer.
+            double value = 0;
+            if (f64)
+                std::memcpy(&value, decoded_string.data() + index * element_size, sizeof(double));
             else
             {
-                // the decoded string is the desired spectrum, use memcpy
-                memcpy(spectrum->data(), decoded_string.data(), finalSize * sizeof(float));
+                float value_float = 0;
+                std::memcpy(&value_float, decoded_string.data() + index * element_size, sizeof(float));
+                value = value_float;
             }
+            if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+            {
+                spectrum->clear();
+                return 4;
+            }
+            spectrum->at(index) = static_cast<float>(value);
         }
         return 0;
     }
@@ -216,61 +291,81 @@ namespace qAlgorithms
                          std::vector<float> *const spectrum_int,
                          size_t index)
     {
-        assert(spectrum_mz->empty() && spectrum_int->empty());
-        assert(!file->defective);
-        assert(index < file->number_spectra);
-
-        const pugi::xml_node *spectrum_node = file->linknodes->data() + index;
-
-        bool fail = false;
-        const size_t spectrum_size = parse_uint64(
-            spectrum_node->attribute("defaultArrayLength").value(),
-            &fail);
-        assert(!fail);
-
-        const pugi::xml_node spectrum_node_mz = spectrum_node->child("binaryDataArrayList")
-                                                    .child("binaryDataArray");
-
-        // @todo the mzML defines the encoded length of a spectrum, we should use this here
-        // instead of stack allocating a potentially large number of elements.
-        const char *binaryData_mz = spectrum_node_mz.child("binary").child_value();
-
-        int32_t error_mz = decodeSpectrum(binaryData_mz,
-                                          spectrum_mz, spectrum_size,
-                                          file->zlib_compression, file->precision_f64);
-
-        const pugi::xml_node spectrum_node_intensity = spectrum_node_mz.next_sibling();
-
-        const char *binaryData_int = spectrum_node_intensity.child("binary").child_value();
-
-        int32_t error_int = decodeSpectrum(binaryData_int,
-                                           spectrum_int, spectrum_size,
-                                           file->zlib_compression, file->precision_f64);
-
-        if (error_mz + error_int != 0)
+        spectrum_mz->clear();
+        spectrum_int->clear();
+        const pugi::xml_node spec = spectrum_node(file, index);
+        size_t spectrum_size = 0;
+        if (!spec || !read_size(spec.attribute("defaultArrayLength").value(), &spectrum_size))
         {
-            (void)fprintf(stderr, "Error: spectrum %zu could not be decoded as base64 "
-                                  "correctly. Ensure the input file is not corrupted.\n",
-                          index);
-            return 2;
+            (void)fprintf(stderr, "Error: spectrum %zu has an invalid array length or index.\n", index);
+            return 1;
+        }
+        if (spectrum_size == 0)
+            return 0;
+
+        pugi::xml_node mz_array;
+        pugi::xml_node intensity_array;
+        for (pugi::xml_node array : spec.child("binaryDataArrayList").children("binaryDataArray"))
+        {
+            const bool is_mz = bool(cv_param(array, "MS:1000514"));
+            const bool is_intensity = bool(cv_param(array, "MS:1000515"));
+            if ((is_mz && is_intensity) || (is_mz && mz_array) || (is_intensity && intensity_array))
+            {
+                (void)fprintf(stderr, "Error: spectrum %zu has ambiguous m/z or intensity arrays.\n", index);
+                return 1;
+            }
+            if (is_mz)
+                mz_array = array;
+            if (is_intensity)
+                intensity_array = array;
         }
 
+        const pugi::xml_node arrays[] = {mz_array, intensity_array};
+        std::vector<float> *outputs[] = {spectrum_mz, spectrum_int};
+        for (size_t array_index = 0; array_index < 2; ++array_index)
+        {
+            const pugi::xml_node array = arrays[array_index];
+            bool compressed = false;
+            bool f64 = false;
+            size_t array_length = spectrum_size;
+            const pugi::xml_attribute length_attribute = array.attribute("arrayLength");
+            if (!array || !array.child("binary") || !binary_encoding(array, &compressed, &f64) ||
+                (length_attribute && (!read_size(length_attribute.value(), &array_length) || array_length != spectrum_size)))
+            {
+                (void)fprintf(stderr, "Error: spectrum %zu has missing or unsupported %s array metadata; "
+                                      "32/64-bit floats with zlib or no compression are supported.\n",
+                              index, array_index == 0 ? "m/z" : "intensity");
+                spectrum_mz->clear();
+                spectrum_int->clear();
+                return 1;
+            }
+            const char *binary_data = array.child("binary").child_value();
+            if (decodeSpectrum(binary_data, std::strlen(binary_data), outputs[array_index], spectrum_size, compressed, f64) != 0)
+            {
+                (void)fprintf(stderr, "Error: spectrum %zu has invalid %s binary data, decompression or decoded length.\n",
+                              index, array_index == 0 ? "m/z" : "intensity");
+                spectrum_mz->clear();
+                spectrum_int->clear();
+                return 2;
+            }
+        }
         return 0;
     };
 
     void get_spectra_RT(const XML_File *file, const std::vector<uint32_t> *indices, std::vector<float> *const RTs)
     {
-        const size_t idxSize = indices->size();
-        assert(!file->defective);
-        assert(idxSize > 0);
-
-        RTs->resize(idxSize);
-        float *RT_data = RTs->data();
-
-        for (size_t specNum = 0; specNum < idxSize; ++specNum)
+        RTs->clear();
+        RTs->reserve(indices->size());
+        for (uint32_t index : *indices)
         {
-            float RT = spectrum_rt(file, specNum);
-            RT_data[specNum] = RT;
+            const float rt = spectrum_rt(file, index);
+            if (!std::isfinite(rt) || (!RTs->empty() && rt <= RTs->back()))
+            {
+                (void)fprintf(stderr, "Error: selected spectrum %u has an invalid or non-increasing retention time.\n", index);
+                RTs->clear();
+                return;
+            }
+            RTs->push_back(rt);
         }
     };
 
@@ -280,9 +375,9 @@ namespace qAlgorithms
                                          const bool profile_mode)
     {
         // return a vector of all indices that are relevant to the query. Properties are checked in order of regularity.
-        assert(!file->defective);
+        if (!file || file->defective || !file->linknodes)
+            return {};
         const size_t numSpectra = file->number_spectra;
-        assert(numSpectra > 0);
         std::vector<uint32_t> indices;
         indices.reserve(numSpectra);
 
@@ -328,106 +423,43 @@ namespace qAlgorithms
             }
         }
 
-        if (centroided > 0)
-        {
-            assert(profile == 0);
-            return true;
-        }
-        return false;
+        return centroided > 0 && profile == 0;
     }
 
     bool spectrum_is_compressed(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
-        // Per standard, the compression should be specified at the binaryDataArrayList level.
-        // Going by actual output files, this is not the case.
-        const pugi::xml_node binaryDataArrayNode = spec->child("binaryDataArrayList")
-                                                       .child("binaryDataArray");
-
-        bool isCompressed = !binaryDataArrayNode.find_child_by_attribute("cvParam",
-                                                                         "accession",
-                                                                         "MS:1000574")
-                                 .empty();
-        if (isCompressed)
-            return true;
-
-        bool isNotCompressed = !binaryDataArrayNode.find_child_by_attribute("cvParam",
-                                                                            "accession",
-                                                                            "MS:1000576")
-                                    .empty();
-        assert(isNotCompressed);
-        return false;
+        const pugi::xml_node array = spectrum_node(file, specNum).child("binaryDataArrayList").child("binaryDataArray");
+        return bool(cv_param(array, "MS:1000574"));
     }
 
     bool spectrum_is_float64(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
-        const pugi::xml_node binaryDataArrayNode = spec->child("binaryDataArrayList")
-                                                       .child("binaryDataArray");
-
-        bool isDouble = !binaryDataArrayNode.find_child_by_attribute("cvParam",
-                                                                     "accession",
-                                                                     "MS:1000523")
-                             .empty();
-        if (isDouble)
-            return true;
-
-        bool isFloat = !binaryDataArrayNode.find_child_by_attribute("cvParam",
-                                                                    "accession",
-                                                                    "MS:1000521")
-                            .empty();
-        assert(isFloat);
-        return false;
+        const pugi::xml_node array = spectrum_node(file, specNum).child("binaryDataArrayList").child("binaryDataArray");
+        return bool(cv_param(array, "MS:1000523"));
     }
 
     bool spectrum_is_profile(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
-        // values taken from https://peptideatlas.org/tmp/mzML1.1.0.html
-        bool isProfile = !spec->find_child_by_attribute("cvParam",
-                                                        "accession",
-                                                        "MS:1000128")
-                              .empty();
-        return isProfile;
+        return bool(cv_param(spectrum_node(file, specNum), "MS:1000128"));
     }
 
     uint32_t spectrum_ms_level(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
-        // values taken from https://peptideatlas.org/tmp/mzML1.1.0.html
-        bool fail = false;
-        uint32_t ms_lvl = parse_uint64(
-            spec->find_child_by_attribute("cvParam",
-                                          "name",
-                                          "ms level")
-                .attribute("value")
-                .value(),
-            &fail);
-        assert(!fail);
-        return ms_lvl;
+        const pugi::xml_node param = cv_param(spectrum_node(file, specNum), "MS:1000511");
+        size_t level = 0;
+        if (!read_size(param.attribute("value").value(), &level) || level > std::numeric_limits<uint32_t>::max())
+            return 0;
+        return static_cast<uint32_t>(level);
     }
 
     Polarities spectrum_polarity(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
-
-        bool positive_scan = !spec->find_child_by_attribute("cvParam",
-                                                            "accession",
-                                                            "MS:1000130")
-                                  .empty();
-        if (positive_scan)
+        const pugi::xml_node spec = spectrum_node(file, specNum);
+        const bool positive_scan = bool(cv_param(spec, "MS:1000130"));
+        const bool negative_scan = bool(cv_param(spec, "MS:1000129"));
+        if (positive_scan && !negative_scan)
             return Polarities::positive;
-
-        bool negative_scan = !spec->find_child_by_attribute("cvParam",
-                                                            "accession",
-                                                            "MS:1000129")
-                                  .empty();
-        if (negative_scan)
+        if (negative_scan && !positive_scan)
             return Polarities::negative;
 
         return Polarities::unknown_polarity;
@@ -435,40 +467,45 @@ namespace qAlgorithms
 
     float spectrum_rt(const XML_File *file, const size_t specNum)
     {
-        assert(specNum < file->number_spectra);
-        const pugi::xml_node *spec = file->linknodes->data() + specNum;
+        const pugi::xml_node scan = spectrum_node(file, specNum).child("scanList").child("scan");
+        const pugi::xml_node rt_node = cv_param(scan, "MS:1000016");
+        const char *value_text = rt_node.attribute("value").value();
+        char *value_end = nullptr;
+        errno = 0;
+        const float value = std::strtof(value_text, &value_end);
+        if (value_end == value_text || *value_end != '\0' || errno == ERANGE || !std::isfinite(value) || value < 0)
+            return std::numeric_limits<float>::quiet_NaN();
 
-        const pugi::xml_node rt_node = spec->child("scanList")
-                                           .child("scan")
-                                           .find_child_by_attribute("cvParam",
-                                                                    "name",
-                                                                    "scan start time");
-
-        float rt_val = rt_node.attribute("value").as_float();
-        const char *rt_unit = rt_node.attribute("unitName").as_string();
-        bool unit_minutes = strcmp(rt_unit, "minute") == 0; // strcmp returns 0 for equal strings
-        if (!unit_minutes)
-        {
-            assert(strcmp(rt_unit, "second") == 0);
-        }
-
-        float timescale = unit_minutes ? 60 : 1; // output is always in seconds -> * 60 if time is minutes
-        return rt_val * timescale;
+        const char *unit_accession = rt_node.attribute("unitAccession").value();
+        const char *unit_name = rt_node.attribute("unitName").value();
+        const bool minutes = *unit_accession ? std::strcmp(unit_accession, "UO:0000031") == 0
+                                            : std::strcmp(unit_name, "minute") == 0;
+        const bool seconds = *unit_accession ? std::strcmp(unit_accession, "UO:0000010") == 0
+                                            : std::strcmp(unit_name, "second") == 0;
+        if (!minutes && !seconds)
+            return std::numeric_limits<float>::quiet_NaN();
+        const float rt = value * (minutes ? 60.0F : 1.0F);
+        return std::isfinite(rt) ? rt : std::numeric_limits<float>::quiet_NaN();
     }
 
     // Decodes a Base64 string into a string with binary data using the simdutf library subset chosen by '--with-base64'
     // (https://github.com/simdutf/simdutf/tree/master?tab=readme-ov-file#single-header-version-with-limited-features).
     std::vector<char> decode_base64(const char *encoded_string, const size_t encoded_length)
     {
-        const size_t decoded_length = encoded_length / 4 * 3;
+        if (!encoded_string || encoded_length == 0)
+            return {};
+        const size_t decoded_length = simdutf::maximal_binary_length_from_base64(encoded_string, encoded_length);
+        if (decoded_length == 0)
+            return {};
         std::vector<char> output(decoded_length);
         simdutf::result simd_res = simdutf::base64_to_binary(encoded_string,
                                                              encoded_length,
-                                                             output.data());
+                                                             output.data(), simdutf::base64_default,
+                                                             simdutf::last_chunk_handling_options::strict);
 
         if (simd_res.error != 0) // [[unlikely]]
         {
-            return {0}; // error message is handled one function above
+            return {}; // error message is handled one function above
         }
         output.resize(simd_res.count);
         return output;
@@ -486,27 +523,31 @@ namespace qAlgorithms
 
     void compress_zlib(const std::vector<char> *uncompressed_string, std::vector<char> *output_string)
     {
-        // worst case: no compression (probably impossible)
-        output_string->resize(uncompressed_string->size());
+        output_string->resize(zng_compressBound(uncompressed_string->size()));
         size_t outSize = output_string->size();
-        zng_compress((Bytef *)output_string->data(), &outSize,
-                     (Bytef *)uncompressed_string->data(), outSize);
-        assert(outSize != uncompressed_string->size());
+        const int32_t status = zng_compress(reinterpret_cast<uint8_t *>(output_string->data()), &outSize,
+                                            reinterpret_cast<const uint8_t *>(uncompressed_string->data()),
+                                            uncompressed_string->size());
+        if (status != Z_OK)
+        {
+            output_string->clear();
+            return;
+        }
         output_string->resize(outSize);
     };
 
     void decompress_inPlace(std::vector<char> *in_out, const size_t decompressedSize)
     {
-        assert(in_out->size() > 1);
-        assert(decompressedSize > in_out->size());
-        std::vector<char> buffer(*in_out);
-        in_out->clear();
-        in_out->resize(decompressedSize);
-
+        std::vector<char> buffer(decompressedSize);
         size_t outSize = decompressedSize;
-        zng_uncompress((Bytef *)in_out->data(), &outSize,
-                       (Bytef *)buffer.data(), buffer.size());
-        assert(outSize == decompressedSize);
+        const int32_t status = zng_uncompress(reinterpret_cast<uint8_t *>(buffer.data()), &outSize,
+                                              reinterpret_cast<const uint8_t *>(in_out->data()), in_out->size());
+        if (status != Z_OK || outSize != decompressedSize)
+        {
+            in_out->clear();
+            return;
+        }
+        in_out->swap(buffer);
     }
 
     void compress_and_encode(const uint8_t *input_arr,
@@ -517,9 +558,12 @@ namespace qAlgorithms
         const size_t compressionBound = zng_compressBound(length);
         std::vector<char> buffer(compressionBound);
         size_t outSize = compressionBound;
-        zng_compress((Bytef *)buffer.data(), &outSize,
-                     (Bytef *)input_arr, length);
-        assert(outSize <= buffer.size());
+        const int32_t status = zng_compress(reinterpret_cast<uint8_t *>(buffer.data()), &outSize, input_arr, length);
+        if (status != Z_OK || outSize > buffer.size())
+        {
+            output_string->clear();
+            return;
+        }
 
         // encode as base64
         size_t base64_size = simdutf::base64_length_from_binary(outSize);

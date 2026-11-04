@@ -6,32 +6,32 @@ project(qAlgorithms VERSION 0.2 LANGUAGES CXX)
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-# set(CMAKE_CXX_COMPILER "g++")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# @todo add a variable to decide debug / optimised as command line argument 
-if (false)
-    add_compile_options(-O3) 
-    # hardening flags 
-    add_compile_options(-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3)
-else()
-    add_compile_options(-O0 -fno-omit-frame-pointer)
+# Let CMake's selected configuration control optimisation and debug symbols.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-# debug-related flags - @todo remove for actual release build?
-add_compile_options(-ggdb3)
+option(QALGORITHMS_NATIVE_ARCH "Optimise for the build machine's CPU (not portable)" OFF)
+option(QALGORITHMS_USE_ZLIB_NG "Use the native zlib-ng API instead of standard zlib" OFF)
+include(CheckCXXCompilerFlag)
 
-# general stuff
-add_compile_options(
+# Optional diagnostics vary between compiler versions. Only add supported flags.
+function(qalgo_add_supported_option flag)
+    string(MAKE_C_IDENTIFIER "QALGORITHMS_HAS_${flag}" flag_variable)
+    check_cxx_compiler_flag("${flag}" ${flag_variable})
+    if(${flag_variable})
+        add_compile_options("${flag}")
+    endif()
+endfunction()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+foreach(flag IN ITEMS
     -fno-math-errno            # Disables math functions setting errno, might result in speedup
     -fno-signed-zeros          # no difference between +0 and -0, might increase performance
-    -march=native              # Optimize the code for the architecture of the current build machine, implies highest supported AVX
     -fstrict-flex-arrays=3     # Size of arrays at the end of a struct must be known at compile time
-    -D_GLIBCXX_ASSERTIONS      # Activates assertions for the Standard C++ Library for debugging @todo remove in release
-    -ftrapv                    # trap when a float value overflows
-)
-
-# Enabled warnings
-add_compile_options(
     -Wall                      # Enables all recommended warnings
     -Wextra                    # Enables additional warnings
     -Wpedantic                 # Warns if not standard compliant
@@ -54,14 +54,25 @@ add_compile_options(
     -Wpointer-arith
     -Waddress-of-packed-member
 )
+    qalgo_add_supported_option("${flag}")
+endforeach()
+add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+add_compile_options($<$<CONFIG:Debug>:-fno-omit-frame-pointer>)
+add_compile_options($<$<CONFIG:Debug>:-ftrapv>) # Trap signed integer overflow in debug builds.
+if(QALGORITHMS_NATIVE_ARCH)
+    qalgo_add_supported_option(-march=native)
+endif()
+elseif(MSVC)
+    add_compile_options(/W4)
+endif()
 
 # narrowing float conversion warning is different between clang and gcc
 message(STATUS "Compiling with ${CMAKE_CXX_COMPILER_ID}")
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(-Wimplicit-float-conversion)
+    qalgo_add_supported_option(-Wimplicit-float-conversion)
     message(STATUS "Clang used")
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    add_compile_options(
+    foreach(flag IN ITEMS
         -Wfloat-conversion
         -Wvector-operation-performance
         -Wduplicated-cond          # Warns if both arguments of conditional statement are the same (int a = (bool) ? 1 : 1)
@@ -69,6 +80,8 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
         -Wuseless-cast             # Warns casting expression to its own type
         -Wchanges-meaning          # @todo what does this do exactly?
         )
+        qalgo_add_supported_option("${flag}")
+    endforeach()
 elseif(MSVC)
     message(STATUS "MSVC does not support a warning for float -> double conversions")
 else()
@@ -133,22 +146,21 @@ target_include_directories(qalgo_lib PUBLIC
 # PROGRAM SOURCE
 add_executable(${PROJECT_NAME} "${SOURCE_DIR}/qalgorithms_main.cpp")
 
-# link against zlib on windows - requires explicit path under mingw for some reason
-if(WIN32 AND (CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"))
-    set(ZLIB_ROOT "C:/msys64/ucrt64")
-    set(ZLIB_INCLUDE_DIR "${ZLIB_ROOT}/include")
-    set(ZLIB_LIBRARY     "${ZLIB_ROOT}/lib/libz.a")
-    set(ZLIB_USE_STATIC_LIBS "ON")
-
-    find_package(ZLIB REQUIRED)
-    target_link_libraries(${PROJECT_NAME} qalgo_lib ZLIB::ZLIB) 
-else()
+# Keep the selected header and linked library in agreement. Users can pass
+# ZLIB_ROOT or CMAKE_PREFIX_PATH for a non-standard installation, including MSYS2.
+if(QALGORITHMS_USE_ZLIB_NG)
     find_package(zlib-ng CONFIG REQUIRED)
-    target_link_libraries(${PROJECT_NAME} qalgo_lib zlib-ng::zlib) 
+    target_compile_definitions(qalgo_lib PUBLIC QALGORITHMS_USE_ZLIB_NG)
+    target_link_libraries(qalgo_lib PUBLIC zlib-ng::zlib)
+else()
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(qalgo_lib PUBLIC ZLIB::ZLIB)
 endif()
+target_link_libraries(${PROJECT_NAME} PRIVATE qalgo_lib)
+
 # TESTS
 include(CTest)
-enable_testing()
+if(BUILD_TESTING)
 
 file(GLOB_RECURSE TESTFILES "${TESTS_DIR}/*.cpp")
 list(FILTER TESTFILES EXCLUDE REGEX ".*/test/shared/.*") # lets just assume that no one is stupid enough to have a second test/shared folder in this project
@@ -170,13 +182,17 @@ foreach(src IN LISTS TESTFILES)
 
     add_executable(${target_name} "${src}")
     set_target_properties(${target_name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests_bin)
-    if(WIN32 AND (CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU"))
-        target_link_libraries(${target_name} PRIVATE qalgo_lib test_shared_lib PUBLIC ZLIB::ZLIB)
-    else()
-        target_link_libraries(${target_name} PRIVATE qalgo_lib test_shared_lib PUBLIC zlib-ng::zlib)
-    endif()
+    target_link_libraries(${target_name} PRIVATE qalgo_lib test_shared_lib)
     add_test(NAME ${target_name} COMMAND ${target_name})
 endforeach()
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
+add_test(NAME test_qpeaks_regressions COMMAND test_qpeaks --regressions-only)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_mzml_cli
+        COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_mzml_cli.py"
+                "$<TARGET_FILE:qAlgorithms>")
+    set_tests_properties(test_mzml_cli PROPERTIES TIMEOUT 120)
+endif()
+endif()

@@ -1,266 +1,161 @@
-// internal
+// Command-line workflow: mzML profile spectra -> centroids -> bins -> feature CSV.
 #include "qalgorithms_datatypes.h"
 #include "qalgorithms_input_output.h"
 #include "qalgorithms_qbin.h"
 #include "qalgorithms_qpeaks.h"
 #include "qalgorithms_read_file.h"
 
-#include <cassert>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
 #include <cstdio>
-#include <cstdlib>
+#include <cctype>
 #include <ctime>
+#include <exception>
 #include <filesystem>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 using namespace qAlgorithms;
 
-int main(int argc, const char *argv[]) // NOLINTBEGIN(concurrency-mt-unsafe)
+static std::string outputKey(std::string name)
 {
-    UserInputSettings userArgs = passCliArgs(argc, argv);
+#ifdef _WIN32
+    for (char &c : name)
+        c = (char)std::tolower((unsigned char)c);
+#endif
+    return name;
+}
 
-    if (!inputsAreSensible(userArgs))
+static void processFile(const std::filesystem::path &pathSource, const UserInputSettings &args,
+                        std::set<std::string> &outputNames)
+{
+    if (args.printCentroidsMZML)
     {
-        exit(1);
+        centroids_to_mzml(&pathSource);
+        return;
     }
 
-    // the final task list contains only unique files, sorted by filesize
-    const std::vector<std::filesystem::path> tasklist = controlInput(&userArgs);
+    XML_File inputFile(pathSource.c_str(), mzML);
+    if (inputFile.defective)
+        throw std::runtime_error("The mzML file could not be read.");
 
-    clock_t absoluteStart = clock();
+    std::vector<Polarities> polarities{inputFile.polarityMode};
+    if (inputFile.polarityMode == Polarities::mixed)
+        polarities = {Polarities::positive, Polarities::negative};
 
-#pragma region file processing
-    std::string filename;
-    size_t errorCount = 0;
-    for (size_t pathIdx = 0; pathIdx < tasklist.size(); pathIdx++)
+    size_t processedPolarities = 0;
+    for (const Polarities polarity : polarities)
     {
-        std::filesystem::path pathSource = std::filesystem::canonical(tasklist[pathIdx]);
-        clock_t timeStart = clock();
-        if (!userArgs.silent)
-        {
-            const char format[] = "\nreading file %zu of %zu\n" _STR "\n";
-            printf(format, pathIdx + 1, tasklist.size(), pathSource.c_str());
-        }
-
-#pragma region "centroid to mzml"
-        if (userArgs.printCentroidsMZML)
-        {
-            // This function handles everything from input validation to processing and file saving.
-            // We should probably make it a separate program with its own specialised input validation
-            centroids_to_mzml(&pathSource);
-
-            exit(1);
-        }
-
-#pragma endregion "centroid to mzml"
-
-        XML_File inputFile(pathSource.c_str(), mzML);
-
-        if (inputFile.defective)
-        {
-            inputFile.free_linknodes();
-            (void)fprintf(stderr, "Error: the file is defective.\n");
-            if (userArgs.skipError)
-            {
-                ++errorCount;
-                continue;
-            }
-            exit(101);
-        }
-
-        if (inputFile.isCentroided) // in profile mode sometimes centroided spectra appear as well @todo is 2 a good idea?
-        {
-            (void)fprintf(stderr, "Error: centroided data is not supported by qAlgorithms for the time being.\n");
-            continue;
-        }
-        if (!userArgs.silent)
-        {
-            printf(" file in profile mode, ok\n");
-        }
-        filename = pathSource.stem().string();
-
-        // start with positive scans when evaluating mixed mode spectra
-        Polarities currentPolarity = inputFile.polarityMode;
-        if (currentPolarity == Polarities::mixed)
-            currentPolarity = Polarities::positive;
-        assert(currentPolarity != Polarities::unknown_polarity);
-
-    // because there are only three cases, the logic is handled like this:
-    // 1) negative or positive only: set the argument for filter_spectra correctly and proceed. There is no looping.
-    // 2) mixed mode: start with positive scans, then set polarity to negative and goto EVALUATE_MIXED_POLARITY.
-    //    This is a bit messy, but everything else i can think of involves an abused loop construct that
-    //    has horrible readability and requires more variables to handle the switching. do ... while would
-    //    serve the same purpose, but is less obvious about only happening once.
-    EVALUATE_MIXED_POLARITY:
-        // @todo MS2 support here!
-        const std::vector<uint32_t> selectedIndices = filter_spectra(&inputFile, true, currentPolarity, true);
-
+        const std::vector<uint32_t> selectedIndices = filter_spectra(&inputFile, true, polarity, true);
         if (selectedIndices.empty())
-        {
-            (void)fprintf(stderr, "Error: No valid spectra exist in the source file %s\n", filename.c_str());
-        }
+            continue;
 
-        if (!userArgs.silent)
-        {
-            printf("    Processing %s peaks\n", currentPolarity == Polarities::positive ? "positive" : "negative");
-        }
+        std::string filename = pathSource.stem().string();
         if (inputFile.polarityMode == Polarities::mixed)
-        {
-            filename += (currentPolarity == Polarities::positive ? "_positive" : "_negative");
-        }
+            filename += polarity == Polarities::positive ? "_positive" : "_negative";
+        if (!args.outputPath.empty() && !outputNames.insert(outputKey(filename)).second)
+            throw std::runtime_error("Two inputs would write the same output filename. Process them into separate directories.");
+        if (!args.silent)
+            printf("    Processing %zu %s MS1 profile spectra\n", selectedIndices.size(),
+                   polarity == Polarities::positive ? "positive" : "negative");
 
-        if (userArgs.printProfileSection)
-        {
-            // This is a somewhat crude solution to print a section of the data in profile mode.
-            // Really, this should be a separate program within the qAlgorithms project @todo
-            printProfileSections(&inputFile,
-                                 &userArgs,
-                                 &selectedIndices,
-                                 filename);
-        }
-
-#pragma region "centroiding"
         std::vector<float> retentionTimes;
         get_spectra_RT(&inputFile, &selectedIndices, &retentionTimes);
+        if (retentionTimes.size() != selectedIndices.size())
+            throw std::runtime_error("Could not read retention times for the selected spectra.");
 
-        std::vector<CentroidPeak> *centroids = new std::vector<CentroidPeak>;
-        size_t centroidCount = findCentroids(&inputFile,
-                                             &selectedIndices,
-                                             centroids);
-
-        assert(centroidCount < UINT32_MAX);
-        if (centroidCount == 0)
+        if (args.printProfileSection)
+            printProfileSections(&inputFile, &args, &selectedIndices, filename);
+        if (args.term == TerminateAfter::profilesec)
         {
-            (void)fprintf(stderr, "Error: no centroids found despite valid indices\n");
+            ++processedPolarities;
+            continue;
         }
 
-        if (userArgs.printCentroids)
+        std::vector<CentroidPeak> centroids;
+        findCentroids(&inputFile, &selectedIndices, &centroids);
+        if (args.printCentroids)
+            printCentroids(&centroids, &retentionTimes, args.outputPath, filename, args.silent, args.noOverwrite);
+        if (args.term == TerminateAfter::centroids)
         {
-            printCentroids(centroids, &retentionTimes, userArgs.outputPath, filename, userArgs.silent, userArgs.noOverwrite);
+            ++processedPolarities;
+            continue;
         }
 
-        assert(!centroids->empty());
-
-        // find lowest intensity among all centroids to use as baseline during componentisation
-        float minCenArea = INFINITY;
-        for (size_t cenID = 1; cenID < centroidCount; cenID++)
+        std::vector<EIC> bins;
+        if (centroids.size() >= 5)
+            bins = performQbinning(&centroids, &retentionTimes);
+        if (args.printBins)
+            printBins(&centroids, &bins, args.outputPath, filename, args.silent, args.noOverwrite);
+        if (args.term == TerminateAfter::binning)
         {
-            float currentInt = centroids->at(cenID).area;
-            minCenArea = minCenArea < currentInt ? minCenArea : currentInt;
+            ++processedPolarities;
+            continue;
         }
-        size_t totalScans = centroids->back().number_MS1;
-
-        clock_t timeEnd = clock();
-        double timePassed_s = double(timeEnd - timeStart) / CLOCKS_PER_SEC;
-
-        if (!userArgs.silent)
-        {
-            printf("    produced %zu centroids from %zu spectra in %0.3f s\n",
-                   centroidCount, totalScans, timePassed_s);
-        }
-
-#pragma region "binning"
-        timeStart = clock();
-
-        std::vector<EIC> binnedData = performQbinning(centroids, &retentionTimes);
-
-        timeEnd = clock();
-
-        if (binnedData.empty())
-        {
-            (void)fprintf(stderr, "Error: no bins could be constructed from the data.\n");
-            if (!userArgs.skipError)
-                exit(1);
-
-            errorCount += 1;
-        }
-
-        if (!userArgs.silent)
-        {
-            timePassed_s = double(timeEnd - timeStart) / CLOCKS_PER_SEC;
-            printf("    assembled %zu bins in %f s\n", binnedData.size(), timePassed_s);
-        }
-        if (userArgs.printBins)
-        {
-            printBins(centroids,
-                      &binnedData,
-                      // &retentionTimes,
-                      userArgs.outputPath,
-                      filename,
-                      userArgs.silent,
-                      userArgs.noOverwrite);
-        }
-        delete centroids;
-
-#pragma region "feature construction"
-        timeStart = clock();
 
         std::vector<FeaturePeak> features;
-        findFeatures(&binnedData, &retentionTimes, &features);
-
+        findFeatures(&bins, &retentionTimes, &features);
         if (features.empty())
+            (void)fprintf(stderr, "Warning: no features detected in %s; the feature CSV contains its header only.\n",
+                          filename.c_str());
+        if (args.printFeatures &&
+            !printFeatureList(&features, args.outputPath, filename, &bins, args.silent, args.noOverwrite))
+            throw std::runtime_error("Could not write the feature CSV.");
+        if (!args.silent)
+            printf("    produced %zu centroids, %zu bins and %zu features\n",
+                   centroids.size(), bins.size(), features.size());
+        ++processedPolarities;
+    }
+    if (processedPolarities == 0)
+        throw std::runtime_error("No MS1 profile spectra with a supported polarity were found. Centroid-only data is not supported.");
+}
+
+int main(int argc, const char *argv[])
+{
+    try
+    {
+        UserInputSettings args = passCliArgs(argc, argv);
+        if (!inputsAreSensible(args))
+            return 1;
+        const std::vector<std::filesystem::path> tasks = controlInput(&args);
+
+        // A shared output directory must not silently merge distinct samples.
+        std::set<std::string> outputStems;
+        if (!args.outputPath.empty())
         {
-            (void)fprintf(stderr, "Warning: no features were constructed, continuing...\n");
+            for (const auto &path : tasks)
+                if (!outputStems.insert(outputKey(path.stem().string())).second)
+                    throw std::runtime_error("Input files have the same filename stem. Process them into separate output directories.");
         }
 
-        if (userArgs.printFeatures) // this is here so we can incorporate the component ID into the output
+        const clock_t start = clock();
+        size_t failures = 0;
+        std::set<std::string> outputNames;
+        for (size_t i = 0; i < tasks.size(); ++i)
         {
-            printFeatureList(&features,
-                             userArgs.outputPath,
-                             filename,
-                             &binnedData,
-                             userArgs.silent,
-                             userArgs.noOverwrite);
-        }
-
-        timeEnd = clock();
-
-        if (!userArgs.silent)
-        {
-            timePassed_s = double(timeEnd - timeStart) / CLOCKS_PER_SEC;
-            printf("    constructed %zu features in %f s\n", features.size(), timePassed_s);
-        }
-
-#if 0
-        if (userArgs.printFeatCens)
-        {
-            // printFeatureCentroids(&features, userArgs.outputPath, filename, &binnedData, // &retentionTimes, // @todo this is incomplete
-            //                       userArgs.silent, userArgs.noOverwrite);
-        }
-
-        if (userArgs.term == TerminateAfter::features)
-        {
-            if (userArgs.printFeatures) // this is here so we can incorporate the component ID into the output
+            if (!args.silent)
+                printf("\nReading file %zu of %zu: %s\n", i + 1, tasks.size(), tasks[i].string().c_str());
+            try
             {
-                printFeatureList(&features, userArgs.outputPath, filename, &binnedData, &retentionTimes,
-                                 userArgs.silent, userArgs.noOverwrite);
+                processFile(tasks[i], args, outputNames);
+            }
+            catch (const std::exception &error)
+            {
+                (void)fprintf(stderr, "Error processing %s: %s\n", tasks[i].string().c_str(), error.what());
+                ++failures;
+                if (!args.skipError)
+                    return 1;
             }
         }
-
-#endif
-        if (inputFile.polarityMode == Polarities::mixed)
-        {
-            assert(currentPolarity == Polarities::positive);
-            currentPolarity = Polarities::negative;
-            goto EVALUATE_MIXED_POLARITY;
-        }
-
-        // @todo this function really needs to be shortened
-        inputFile.free_linknodes();
+        if (!args.silent)
+            printf("Completed %zu of %zu files successfully (%zu failed) in %.3f s.\n",
+                   tasks.size() - failures, tasks.size(), failures,
+                   double(clock() - start) / CLOCKS_PER_SEC);
+        return failures == 0 ? 0 : 1;
     }
-
-#pragma region "Logging and similar" // @todo add an option for custom logfile names
-    if (!userArgs.silent)
+    catch (const std::exception &error)
     {
-        double timePassed_s = double(clock() - absoluteStart) / CLOCKS_PER_SEC;
-        printf("Completed data processing on %zu files in %f s.\n", tasklist.size(), timePassed_s);
-        if (errorCount > 0)
-        {
-            printf("Skipped %zu files which could not be processed.\n", errorCount);
-        }
-        printf("\n");
+        (void)fprintf(stderr, "Error: %s\n", error.what());
+        return 1;
     }
-    return 0;
 }
-// NOLINTEND(concurrency-mt-unsafe)

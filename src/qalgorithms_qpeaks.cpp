@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <stdexcept>
 #if defined(_WIN32) && !defined(_USE_MATH_DEFINES)
     #define _USE_MATH_DEFINES // relevant for windows to have math constants
 #endif
@@ -28,7 +29,7 @@ namespace qAlgorithms
     // --- internal function declarations --- //
 
     // copy relevant values from regression struct to centroid struct - not all fields supported
-    static inline CentroidPeak regToCen(const RegressionGauss *reg, uint16_t id, uint16_t specNum);
+    static inline CentroidPeak regToCen(const RegressionGauss *reg, uint32_t id, uint16_t specNum);
 
     static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[]);
 
@@ -111,7 +112,7 @@ namespace qAlgorithms
         size_t leftOfApex = size_t(position);
         float delta_x = x_values[leftOfApex + 1] - x_values[leftOfApex];
         // position is determined relative to the point left of the apex
-        float apexFraction = delta_x * position - trunc(position);
+        float apexFraction = delta_x * (position - trunc(position));
         reg->position = x_values[leftOfApex] + apexFraction;
         reg->position_unc *= delta_x;
 
@@ -158,34 +159,47 @@ namespace qAlgorithms
         // treated in the program will be > 1. This reduces the risk of high floating point
         // errors when multiplying a number << 1 with one >> 1.
 
-        // advance so the next loop has less iterations on ranges that are too small
+        // Process each complete contiguous region above the intensity threshold,
+        // including a region that reaches the final sample.
         size_t rangeStart = 0;
-        while ((intensity_base[rangeStart] > minIntensity_global) && (rangeStart < length - 1))
-            rangeStart += 1;
-
-        for (size_t pointIdx = rangeStart; pointIdx < length; pointIdx++)
+        while (rangeStart < length)
         {
-            // expand the region while y values are large enough
-            while ((intensity_base[pointIdx] > minIntensity_global) && (pointIdx < length - 1))
+            while (rangeStart < length && !(intensity_base[rangeStart] > minIntensity_global))
+                ++rangeStart;
+            size_t pointIdx = rangeStart;
+            while (pointIdx < length && intensity_base[pointIdx] > minIntensity_global)
                 pointIdx += 1;
-
-            // since the current point is out-of-range at this point, there is no +1 for the range
             const size_t newLen = pointIdx - rangeStart;
             if (newLen >= MINLENGTH)
             {
+                if (newLen > UINT16_MAX)
+                    throw std::runtime_error("A contiguous profile region exceeds the supported 65535-point limit.");
                 const float *intensities = intensity_base + rangeStart;
                 const float *intensities_log = intensity_base_log.data() + rangeStart;
                 const float *x_axis = x_values + rangeStart;
-                const uint16_t *df = DF_cum == nullptr ? nullptr : DF_cum + rangeStart;
+                std::vector<uint16_t> localDF;
+                if (DF_cum != nullptr)
+                {
+                    const uint16_t previous = rangeStart == 0 ? 0 : DF_cum[rangeStart - 1];
+                    localDF.resize(newLen);
+                    for (size_t i = 0; i < newLen; ++i)
+                        localDF[i] = DF_cum[rangeStart + i] - previous;
+                }
+                const uint16_t *df = DF_cum == nullptr ? nullptr : localDF.data();
 
                 assert(intensities_log[newLen - 1] > 1);
 
-                regression_on_continuum(intensities,
+                const size_t previousResults = result->size();
+                const int32_t status = regression_on_continuum(intensities,
                                         x_axis,
                                         intensities_log,
                                         df,
                                         newLen,
                                         result);
+                if (status < 0)
+                    return status;
+                for (size_t i = previousResults; i < result->size(); ++i)
+                    result->at(i).span.startIdx += (int32_t)rangeStart;
             }
             rangeStart = pointIdx + 1;
         }
@@ -322,24 +336,22 @@ namespace qAlgorithms
         }
 
         // rework of the apex selection, currently without the ability to interpolate points
-        int16_t apexGroups[max_apex_per_group];
-        size_t apexcount = groupRegsByApex(&validRegressions, apexGroups);
+        std::vector<int16_t> apexGroups(validRegressions.size(), -1);
+        size_t apexcount = groupRegsByApex(&validRegressions, apexGroups.data());
         assert(apexcount < INT16_MAX);
 
         for (int16_t groupNum = 0; groupNum < (int16_t)apexcount; groupNum++)
         {
-            int32_t stableApex = groupApexIsStable(&validRegressions, apexGroups, groupNum);
+            int32_t stableApex = groupApexIsStable(&validRegressions, apexGroups.data(), groupNum);
             if (stableApex == -1)
             {
                 // equivalent to only one possible apex being in the data, no complex deconvolution is required
-                size_t chosenOne = selectFromGroup(&validRegressions, intensities, apexGroups, groupNum);
+                size_t chosenOne = selectFromGroup(&validRegressions, intensities, apexGroups.data(), groupNum);
                 validRegressions[chosenOne].isValid = true;
             }
             else
             {
-                if (log_qpeaks(intensities, x_axis, intensities_log, df, length, result))
-                    exit(1); // NOLINT @todo this could actually be a target for parallelising someday
-                return -1;
+                throw std::runtime_error("Unresolved overlapping apex groups: peak deconvolution is not implemented for this profile.");
             }
         }
 
@@ -359,13 +371,8 @@ namespace qAlgorithms
     {
         const size_t length = validRegressions->size();
 
-        assert(length < max_apex_per_group);
-
-        // keep a record of which apex group a given peak belongs to. We assume that
-        // 256 far exceeds the number of possible groups even for large inputs
-        // this has been moved here so apexGroups is always initialised after calling
-        // this function, even when it always returns early
-        for (size_t i = 0; i < max_apex_per_group; i++)
+        // One entry per candidate regression, not per final peak.
+        for (size_t i = 0; i < length; i++)
             apexGroups[i] = -1;
 
         if (length < 2)
@@ -440,6 +447,8 @@ namespace qAlgorithms
                 break;
 
             assert((size_t)currentGroup < length);
+            if (currentGroup >= INT16_MAX - 1)
+                throw std::runtime_error("Too many apex groups in a single profile region.");
             currentGroup += 1;
             // @todo this is duplicated from function initialisation, macro?
             currentApex = reg.position;
@@ -920,7 +929,10 @@ namespace qAlgorithms
         float uncert_height = (float)peakHeightUncert(coeffs, mse_log);
         mutateReg->height_unc = uncert_height;
 
-        size_t leftOfApex = (size_t)position;
+        const float absolutePosition = (float)coeffs->x0 + position;
+        if (!std::isfinite(absolutePosition) || absolutePosition < 0 || absolutePosition + 1 >= length)
+            return invalid_apex;
+        size_t leftOfApex = (size_t)absolutePosition;
         float delta_x = x_axis[leftOfApex + 1] - x_axis[leftOfApex];
         double uncertainty = -1;
         mutateReg->area = (float)peakArea(coeffs, delta_x, mse_log, &uncertainty);
@@ -1054,7 +1066,7 @@ namespace qAlgorithms
         const double inv_E = qalgo_matInverse[coeffs->scale].E;
         double divisor = sqrt(inv_E * mse);
         double t_value = testCoeff / divisor; // test against mean 0
-        return t_value < T_VALUES[df_sum];
+        return t_value < t_critical_95(df_sum);
     }
 
 #pragma region "Feature Detection"
@@ -1076,11 +1088,11 @@ namespace qAlgorithms
         for (size_t j = 0; j < length; j++)
         {
             // multiplication with zero is used instead of a continue so this can be vectorised.
-            bool interpolated = values[j] == 0;
-            float w = (float)interpolated * weight[j];
+            bool measured = values[j] != 0;
+            float w = (float)measured * weight[j];
             sum_weighted_x += values[j] * w;
             sum_weight += w;
-            realPoints += (size_t)interpolated; // interpolated points do not count!
+            realPoints += (size_t)measured; // interpolated points do not count!
         }
         double dpoints = (double)realPoints;
 
@@ -1118,7 +1130,7 @@ namespace qAlgorithms
         float mz_uncert = 0;
         float mz = weightedMeanAndVariance_EIC(area_arr, mz_arr, peak->span.length, &mz_uncert);
         assert(mz > 10);
-        assert(mz_uncert > 0);
+        assert(mz_uncert >= 0);
 
         return {
             peak->coeffs,
@@ -1142,7 +1154,7 @@ namespace qAlgorithms
     }
 
     size_t findFeatures(const std::vector<EIC> *EICs,
-                        const std::vector<float> *convertRT, // correct RT corresponding to every scan number
+                        const std::vector<float> * /*convertRT*/,
                         std::vector<FeaturePeak> *res)
     {
         std::vector<RegressionGauss> peaks;
@@ -1153,13 +1165,15 @@ namespace qAlgorithms
         for (size_t eic_ID = 0; eic_ID < eicCount; eic_ID++)
         {
             const EIC *bin = EICs->data() + eic_ID;
-            const float *rt = convertRT->data() + bin->scanNumbers[0];
+            const float *rt = bin->RT.data();
             size_t binLen = bin->df.size();
-            qpeaks_find(bin->ints_area.data(),
+            const int32_t status = qpeaks_find(bin->ints_area.data(),
                         rt,
                         bin->df.data(),
                         binLen,
                         &peaks);
+            if (status < 0)
+                throw std::runtime_error("Feature detection rejected an extracted ion chromatogram.");
             for (size_t peak = 0; peak < peaks.size(); peak++)
             {
                 FeaturePeak feat = peakToFeat(&peaks[peak], bin, eic_ID);
@@ -1179,7 +1193,7 @@ namespace qAlgorithms
 
 #pragma region "find centroids"
 
-    static inline CentroidPeak regToCen(const RegressionGauss *reg, uint16_t id, uint16_t specNum)
+    static inline CentroidPeak regToCen(const RegressionGauss *reg, uint32_t id, uint16_t specNum)
     {
         return {
             reg->position,
@@ -1203,6 +1217,8 @@ namespace qAlgorithms
     {
         assert(!data->defective);
         assert(centroids->empty());
+        if (selectedIndices->size() > UINT16_MAX)
+            throw std::runtime_error("More than 65535 MS1 profile scans per polarity are not supported in this working version.");
 
         std::vector<float> spectrum_mz;
         spectrum_mz.reserve(1000);
@@ -1216,18 +1232,29 @@ namespace qAlgorithms
                                       &spectrum_mz,
                                       &spectrum_int,
                                       selectedIndices->at(specNum));
-            assert(ok == 0);
+            if (ok != 0)
+                throw std::runtime_error("Could not decode an mzML spectrum; this polarity's feature list was not completed.");
+            if (spectrum_int.size() < MINLENGTH)
+            {
+                spectrum_mz.clear();
+                spectrum_int.clear();
+                continue;
+            }
 
-            const size_t peaksFound = qpeaks_find(spectrum_int.data(),
+            const int32_t peaksFound = qpeaks_find(spectrum_int.data(),
                                                   spectrum_mz.data(),
                                                   nullptr,
                                                   spectrum_int.size(),
                                                   &ret);
+            if (peaksFound < 0)
+                throw std::runtime_error("Centroid detection rejected a spectrum.");
 
-            for (size_t p = 0; p < peaksFound; p++)
+            for (size_t p = 0; p < (size_t)peaksFound; p++)
             {
                 const RegressionGauss *peak = ret.data() + p;
                 size_t id = centroids->size();
+                if (id >= UINT32_MAX)
+                    throw std::runtime_error("The centroid count exceeds the supported range.");
                 centroids->push_back(regToCen(peak, id, specNum));
             }
 

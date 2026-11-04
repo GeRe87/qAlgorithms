@@ -135,7 +135,7 @@ namespace qAlgorithms
                    std::string filename,
                    bool silent, bool noOverwrite);
 
-    void printFeatureList(const std::vector<FeaturePeak> *peaktable,
+    bool printFeatureList(const std::vector<FeaturePeak> *peaktable,
                           std::filesystem::path pathOutput,
                           std::string filename,
                           const std::vector<EIC> *originalBins,

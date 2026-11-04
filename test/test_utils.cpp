@@ -190,10 +190,27 @@ void test_mathlib(void)
     assert(b == 0.996300, "change in cephes behaviour", NULL);
 }
 
+void test_t_critical_beyond_table()
+{
+    // Independent Student-t inverse-CDF reference values (SciPy 0.95 quantile).
+    // The vendored incomplete-beta evaluator converges at 1e-8. These critical
+    // values differ from the references by about 3.4e-9, so retain an absolute
+    // 1e-8 tolerance for that backend without changing the reference quantiles.
+    const double tolerance = 1e-8;
+    verify(abs(t_critical_95(257) - 1.65080425005550) < tolerance);
+    verify(abs(t_critical_95(400) - 1.64867194146541) < tolerance);
+    verify(abs(t_critical_95(1000) - 1.64637881728546) < tolerance);
+    bool rejected = false;
+    try { (void)t_critical_95(0); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    verify(rejected);
+}
+
 int main()
 {
     srand(1234); // NOLINT
     test_mathlib();
+    test_t_critical_beyond_table();
     test_rounding();
     test_min_max();
     test_array_min_max();

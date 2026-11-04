@@ -1,3 +1,8 @@
+> **Working branch:** For the reproducible mzML-to-feature-CSV workflow,
+> build instructions, verification results and current limitations, see
+> [the working-version guide](docs/working-version.md).
+> The legacy overlapping-apex tests remain unresolved; this is experimental.
+
 ## Usage Notice
 At this moment, `qAlgorithms` is provided purely for reasons of scientific transparency. There are
 still known flaws in the concrete implementation, and we are steadily working on finding a useful

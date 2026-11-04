@@ -197,6 +197,143 @@ static void control_sim_gauss()
     assert(flt_equal(area, area_p, 0.01), "inaccurate area (%f vs. %f), empiric %f\n", area, area_p, area_e);
 }
 
+static void test_apex_conversion_nonunit_spacing()
+{
+    // A fitted apex at sample index 2.25 must be interpolated in the x-axis
+    // units. These two axes have steps smaller and larger than one.
+    const float axes[2][5] = {{10, 10.25F, 10.5F, 10.75F, 11},
+                              {10, 12, 14, 16, 18}};
+    const float expected_positions[2] = {10.5625F, 14.5F};
+    const float expected_uncertainties[2] = {0.05F, 0.4F};
+    for (size_t i = 0; i < 2; ++i)
+    {
+        RegressionGauss peak;
+        // log y = log(100) - (x - 0.25)^2, with x relative to sample 2.
+        peak.coeffs = {log(100.0) - 0.0625, 0.5, -1, -1, 2, 2};
+        peak.position = 2.25F;
+        peak.position_unc = 0.2F;
+        peak.height = 100;
+        peak.area = 100;
+        peak.area_unc = 1;
+        peak.isValid = true;
+
+        adjustRegression(&peak, axes[i]);
+
+        assert(std::abs(peak.position - expected_positions[i]) < 1e-6F,
+               "Apex conversion failed: expected %f, found %f\n",
+               expected_positions[i], peak.position);
+        assert(std::abs(peak.position_unc - expected_uncertainties[i]) < 1e-6F,
+               "Position uncertainty must use the same x-axis units\n", NULL);
+    }
+}
+
+static void test_weighted_mean_ignores_interpolated_values()
+{
+    // Zero is the missing-value marker. Its large interpolated intensity must
+    // not dominate the measured masses: (1*100 + 3*104)/(1+3) = 103.
+    const float weights[] = {1, 1000, 3};
+    const float masses[] = {100, 0, 104};
+    float uncertainty = 0;
+    const float mean = weightedMeanAndVariance_EIC(weights, masses, 3, &uncertainty);
+
+    assert(std::abs(mean - 103.0F) < 1e-6F,
+           "Incorrect weighted mass: expected 103, found %f\n", mean);
+    // The function reports sqrt(weighted MSD / measured point count):
+    // sqrt((1*9 + 3*1) / (4*2)) = sqrt(1.5).
+    assert(std::abs(uncertainty - sqrt(1.5)) < 1e-6,
+           "Interpolated values changed the reported uncertainty: %f\n", uncertainty);
+    const float mean_only = weightedMeanAndVariance_EIC(weights, masses, 3, nullptr);
+    assert(std::abs(mean_only - 103.0F) < 1e-6F,
+           "Mean-only path must use the same measured points\n", NULL);
+}
+
+static void test_peak_at_region_boundaries_and_cumulative_df()
+{
+    // Exactly five points require the final sample to participate. Both ends
+    // are above e, so there is no below-threshold sentinel inside the region.
+    const size_t length = 5;
+    std::vector<float> x = {20, 20.5F, 21, 21.5F, 22};
+    std::vector<float> y(length, 0);
+    simulate_gauss(&x, 21.05, 1000, 0.4, &y);
+    assert(y.front() > 3 && y.back() > 3,
+           "Boundary regression fixture must start and end above the threshold\n", NULL);
+
+    std::vector<RegressionGauss> peaks;
+    const int32_t count = qpeaks_find(y.data(), x.data(), nullptr, length, &peaks);
+    assert(count == 1, "Expected one complete boundary peak, found %d\n", count);
+    assert(peaks.front().span.startIdx == 0 && peaks.front().span.length == 5,
+           "The complete five-point region must be fitted\n", NULL);
+    assert(std::abs(peaks.front().position - 21.05F) < 1e-3F,
+           "Incorrect physical apex for boundary peak: %f\n", peaks.front().position);
+    assert(peaks.front().df == 1, "Five measured points minus four fitted coefficients give one DF\n", NULL);
+
+    // Prefixing three low observations must shift only the source span. Their
+    // cumulative counts must not inflate the fitted peak's degrees of freedom.
+    std::vector<float> prefixed_x = {18.5F, 19, 19.5F};
+    std::vector<float> prefixed_y = {1, 1, 1};
+    prefixed_x.insert(prefixed_x.end(), x.begin(), x.end());
+    prefixed_y.insert(prefixed_y.end(), y.begin(), y.end());
+    const uint16_t cumulative_df[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    peaks.clear();
+    const int32_t prefixed_count = qpeaks_find(prefixed_y.data(), prefixed_x.data(),
+                                               cumulative_df, prefixed_y.size(), &peaks);
+    assert(prefixed_count == 1, "Expected the same peak after a prefix, found %d\n", prefixed_count);
+    assert(peaks.front().span.startIdx == 3 && peaks.front().span.length == 5,
+           "Peak span must refer to the original input indices\n", NULL);
+    assert(peaks.front().df == 1,
+           "Prefix observations must not add DF to the fitted region: %u\n", peaks.front().df);
+    assert(std::abs(peaks.front().position - 21.05F) < 1e-3F,
+           "Prefix observations shifted the physical peak position\n", NULL);
+}
+
+static void test_apex_grouping_more_than_128_candidates()
+{
+    std::vector<RegressionGauss> candidates(300);
+    for (RegressionGauss &candidate : candidates)
+    {
+        candidate.position = 7.5F;
+        candidate.span = {2, 11};
+    }
+    std::vector<int16_t> groups(candidates.size(), 77);
+    const size_t count = groupRegsByApex(&candidates, groups.data());
+    assert(count == 1, "Coincident candidates must form exactly one apex group\n", NULL);
+    for (size_t i = 0; i < groups.size(); ++i)
+        assert(groups[i] == 0, "Candidate %zu was not assigned to the common group\n", i);
+}
+
+static void test_features_follow_eic_retention_times()
+{
+    EIC eic;
+    eic.scanNumbers = {4, 5, 7, 8, 10};
+    eic.RT = {20, 20.5F, 21, 21.5F, 22};
+    eic.df = {1, 2, 3, 4, 5};
+    eic.mz.assign(5, 100);
+    eic.DQSC.assign(5, 0.9F);
+    eic.ints_area.assign(5, 0);
+    simulate_gauss(&eic.RT, 21.05, 1000, 0.4, &eic.ints_area);
+
+    // Other scans lie between this ion's observations. Taking a contiguous
+    // slice of the full file's RT array would assign the wrong times to it.
+    const std::vector<float> all_scan_times = {0, 1, 2, 3, 20, 20.5F, 20.75F, 21, 21.5F, 21.75F, 22};
+    const std::vector<EIC> eics = {eic};
+    std::vector<FeaturePeak> features;
+    const size_t count = findFeatures(&eics, &all_scan_times, &features);
+    assert(count == 1, "Expected one feature in the synthetic ion trace\n", NULL);
+    assert(std::abs(features.front().retentionTime - 21.05F) < 1e-3F,
+           "Feature apex must follow the EIC's own retention times: %f\n", features.front().retentionTime);
+    assert(features.front().lowerRT == 20 && features.front().upperRT == 22,
+           "Feature bounds must refer to its measured EIC region\n", NULL);
+}
+
+static void test_centroid_id_above_uint16()
+{
+    RegressionGauss peak;
+    peak.position = 100;
+    const CentroidPeak centroid = regToCen(&peak, 70000U, 42);
+    assert(centroid.ID == 70000U, "Centroid ID was truncated: %u\n", centroid.ID);
+    assert(centroid.number_MS1 == 42, "Centroid scan index changed during conversion\n", NULL);
+}
+
 #if 0
 
 static double peakVal_EMG(double x, double apex, double height, double sdev, double tau)
@@ -531,13 +668,21 @@ static void test_areaPrediction()
     assert(area_t > uncert, "Too high uncertainty\n", NULL);
 }
 
-int main()
+int main(int argc, const char *argv[])
 {
     // initialise seed for noise generating funtions
     srand(1234); // NOLINT
 
-    test_qpeaks_set();
+    test_apex_conversion_nonunit_spacing();
+    test_weighted_mean_ignores_interpolated_values();
+    test_peak_at_region_boundaries_and_cumulative_df();
+    test_apex_grouping_more_than_128_candidates();
+    test_features_follow_eic_retention_times();
+    test_centroid_id_above_uint16();
+    if (argc == 2 && std::strcmp(argv[1], "--regressions-only") == 0)
+        return 0;
 
+    test_qpeaks_set();
     test_singlePeak();
     test_areaPrediction();
     control_sim_gauss();

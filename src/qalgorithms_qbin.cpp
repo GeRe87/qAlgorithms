@@ -542,7 +542,7 @@ namespace qAlgorithms
             tmp_DQSC[i] = point->DQSC;
             tmp_cenID[i] = point->ID;
 
-            tmp_df[i] = eicsize; // @todo this is a temporary solution, think about moving interpolation to its own block
+            tmp_df[i] = (uint16_t)(i + 1); // cumulative number of measured points
         }
         assert(tmp_df.back() == eicsize);
 

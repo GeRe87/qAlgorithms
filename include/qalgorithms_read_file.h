@@ -71,11 +71,13 @@ namespace qAlgorithms
 
         bool isCentroided = false;
 
-        bool zlib_compression = true; // per standard, only zlib is possible (note: i have never seen an uncompressed file)
+        // Legacy first-array metadata. Decoding reads each array's own CV parameters.
+        bool zlib_compression = true;
 
         bool precision_f64 = false;
 
         XML_File(const path_char *filepath, SourceFileType type);
+        ~XML_File();
 
         // copy constructor or assignment could lead to double-free / accessing a dead pointer
         XML_File(XML_File &) = delete;
@@ -94,7 +96,9 @@ namespace qAlgorithms
                         const std::vector<uint32_t> *indices,
                         std::vector<float> *const RTs);
 
-    int32_t get_spectrum(const XML_File *file, // this only extracts data that is in profile mode.
+    // Returns zero on success, nonzero for invalid metadata or binary data.
+    // Both output vectors are empty on failure. Empty scans are valid.
+    int32_t get_spectrum(const XML_File *file,
                          std::vector<float> *const spectrum_mz,
                          std::vector<float> *const spectrum_int,
                          size_t index);

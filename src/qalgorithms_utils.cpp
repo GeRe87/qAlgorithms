@@ -7,9 +7,21 @@
 #include <math.h>
 
 #include <unordered_map>
+#include <limits>
+#include <stdexcept>
 
 namespace qAlgorithms
 {
+    double t_critical_95(size_t degrees_of_freedom)
+    {
+        if (degrees_of_freedom == 0 || degrees_of_freedom > (size_t)std::numeric_limits<int>::max())
+            throw std::invalid_argument("Student-t degrees of freedom are outside the supported range.");
+        if (degrees_of_freedom < sizeof(T_VALUES) / sizeof(T_VALUES[0]))
+            return T_VALUES[degrees_of_freedom];
+        // T_nu^2 follows F(1, nu); the upper F tail is 2 * 0.05.
+        return sqrt(cephes::F_density(1, (int)degrees_of_freedom, 0.1));
+    }
+
     bool t_test_welch(const double mean_1, const double sd_1, const double count_1,
                       const double mean_2, const double sd_2, const double count_2,
                       const float alpha)
@@ -25,7 +37,7 @@ namespace qAlgorithms
         double n2 = count_2 * count_2 * (count_2 - 1);
         size_t df = size_t((1 / count_1 + u / count_2) * (1 / count_1 + u / count_2) / (1 / n1 + u * u / n2));
 
-        double t_refval = T_VALUES[df]; // @todo support more alphas than 0.05 - maybe return the p-value instead? Also support one / two sided
+        double t_refval = t_critical_95(df); // @todo support more alphas than 0.05 and one / two sided
         bool reject_H0 = t > t_refval;
         return reject_H0;
     }

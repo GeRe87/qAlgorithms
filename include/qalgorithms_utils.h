@@ -10,6 +10,8 @@
 /// @brief
 namespace qAlgorithms
 {
+    // One-sided 95% Student-t critical value, extending the stored table safely.
+    double t_critical_95(size_t degrees_of_freedom);
     // sqrt(pi) / 2
     static const double SQRTPI_2 = 0.886226925452758013649;
 
