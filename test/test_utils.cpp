@@ -1,5 +1,6 @@
 #include "qalgorithms_utils.h"
 #include <cstdio>
+#include <limits>
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"
 #pragma GCC diagnostic ignored "-Wfloat-conversion" // added because of manually defined arrays
 #pragma clang diagnostic push
@@ -181,6 +182,59 @@ void test_parse_uint64(void)
     verify(result == 0 && !fail);
 }
 
+void test_inverse_beta_unit_shape_families()
+{
+    const double eps=std::numeric_limits<double>::epsilon();
+    const double tiny=std::numeric_limits<double>::denorm_min();
+    const std::vector<double> probabilities={std::ldexp(1.0,-500),1e-20,1e-12,0.001,0.05,0.25,0.5,0.9,1-1e-8,std::nextafter(1.0,0.0)};
+    for(double shape:{0.125,0.5,1.0,2.0,3.0,10.0,100.0,1000.0,1e6})
+    {
+        double previousA=0,previousB=0;
+        for(double probability:probabilities)
+        {
+            const double actualA=cephes::incbi(shape,1,probability);
+            const double actualB=cephes::incbi(1,shape,probability);
+            const long double p=probability,a=shape;
+            const double expectedA=double(std::pow(p,1/a));
+            const double expectedB=double(-std::expm1(std::log1p(-p)/a));
+            // In the power family, exponent rounding is amplified in the
+            // far tail by |log(p)/a|. Scale the error bound accordingly.
+            const double condition=std::max(1.0,std::abs(std::log(probability)/shape));
+            verify(std::isfinite(actualA) && actualA>=previousA && actualA<=1);
+            verify(std::isfinite(actualB) && actualB>=previousB && actualB<=1);
+            verify(std::abs(actualA-expectedA)<=32*eps*condition*std::abs(expectedA)+8*tiny);
+            verify(std::abs(actualB-expectedB)<=32*eps*std::abs(expectedB)+8*tiny);
+            previousA=actualA;previousB=actualB;
+        }
+        for(double probability:{0.125,0.25,0.5,0.75,0.875})
+            verify(std::abs(cephes::incbi(shape,1,probability)+cephes::incbi(1,shape,1-probability)-1)<=8*eps);
+        verify(cephes::incbi(shape,1,0)==0 && cephes::incbi(shape,1,1)==1);
+        verify(cephes::incbi(1,shape,0)==0 && cephes::incbi(1,shape,1)==1);
+    }
+    // Whole exact families, not just the original quarter-value example.
+    for(int exponent=1;exponent<=500;++exponent)
+        verify(cephes::incbi(0.5,1,std::ldexp(1.0,-exponent))==std::ldexp(1.0,-2*exponent));
+    for(double probability:probabilities)verify(cephes::incbi(1,1,probability)==probability);
+    verify(cephes::incbi(1,2,1e-20)>0); // no cancellation to zero
+}
+
+void test_f_two_numerator_degrees_matches_closed_form()
+{
+    // F(2,nu) has survival function (nu/(nu+2*f))^(nu/2).
+    // Its analytic inverse supplies an independent quantile reference.
+    for(size_t nu=1;nu<=427;++nu)
+        for(double alpha:{0.05,0.01,0.001,1e-6})
+        {
+            const long double v=nu,p=alpha;
+            const double reference=double(v/2*std::expm1(-2*std::log(p)/v));
+            const double actual=F_stat(alpha,4,2,nu+4);
+            verify(std::isfinite(actual) && actual>0);
+            verify(std::abs(actual-reference)<=5e-12*reference);
+            const long double survival=std::exp(-v/2*std::log1p(2*(long double)actual/v));
+            verify(std::abs(survival-p)<=5e-12*p);
+        }
+}
+
 void test_mathlib(void)
 {
     double w = cephes::incbi(0.5 * 1, 0.5 * 2, 0.5);
@@ -209,6 +263,8 @@ void test_t_critical_beyond_table()
 int main()
 {
     srand(1234); // NOLINT
+    test_inverse_beta_unit_shape_families();
+    test_f_two_numerator_degrees_matches_closed_form();
     test_mathlib();
     test_t_critical_beyond_table();
     test_rounding();

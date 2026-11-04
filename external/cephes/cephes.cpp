@@ -202,6 +202,13 @@ namespace cephes
             return (0.0);
         if (yy0 >= 1.0)
             return (1.0);
+        // I_x(a,1)=x^a and I_x(1,b)=1-(1-x)^b. Use their
+        // analytic inverses instead of iterating against an approximate CDF.
+        // log1p/expm1 preserve small lower-tail probabilities for a=1.
+        if (bb == 1.0 && aa > 0.0 && std::isfinite(aa))
+            return std::pow(yy0, 1.0 / aa);
+        if (aa == 1.0 && bb > 0.0 && std::isfinite(bb))
+            return -std::expm1(std::log1p(-yy0) / bb);
         x0 = 0.0;
         yl = 0.0;
         x1 = 1.0;

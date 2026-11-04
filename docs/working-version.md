@@ -82,7 +82,75 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
-## Conditional height uncertainty and validation audit (current continuation)
+## Analytic inverse-beta precision and paired cascade experiment (latest continuation)
+
+The remaining `test_utils` failure came from evaluating the inverse regularized
+beta function iteratively even for a parameter family with a closed form.
+For b=1, I_x(a,1)=x^a; for a=1, I_x(1,b)=1-(1-x)^b. The implementation now uses
+p^(1/a) and -expm1(log1p(-p)/b), respectively, for finite positive shapes.
+Existing probability-endpoint handling and all other shape families are
+unchanged. The original exact assertion incbi(0.5,1,0.5)==0.25 now passes
+without changing the assertion, rounding its result or adjusting a tolerance.
+
+New tests cover both unit-shape families, monotonicity, endpoints, complementary
+probabilities, stable tiny lower tails, 500 exactly representable quadratic
+cases, and 1708 F(2,nu) quantiles/survival probabilities against their independent
+long-double closed form (nu=1..427; alpha=0.05,0.01,0.001,1e-6). Rebuilding the
+new tests with the previous Cephes source fails the new tail-reference test.
+Release, standard Debug and assertion-enabled -Og Debug all build and run the
+complete suite: **7/10 pass**. Only test_qpeaks, test_qpeaks_pt03 and
+test_qpeaks_pt04 still fail, with the original expected counts retained.
+The aggregate qPeaks failure repeats pt_03; it is not a third distinct case.
+
+The complete real-file Release pipeline is rerun after this precision change
+and exits successfully (251.093 s). Both feature CSVs and both unresolved-maxima
+companions are byte-identical to commit 3253b88: 19884 positive / 18640 negative
+rows, including 2736 / 1894 explicitly marked collective descriptions. This
+is not another whole-file Debug run. The unchanged RT-window audits remain
+applicable by byte identity; all area-quantitative-validation flags remain 0.
+No production acceptance threshold, equidistant regression design, grouping,
+height/area definition or output policy changes in this continuation.
+
+A separate private benchmark runs the same 5202 serialized float32 inputs
+through (0) the production cascade, (1) full-fit-domain residual/df/F comparison
+with local alpha, and (2) that full-fit-domain variant with Bonferroni alpha
+0.05/M for every predefined symmetric window of the entire input. M is fixed
+before any shape filtering. This experiment uses the strict API, so grouping
+errors are recorded explicitly and are never counted as successful zero output.
+There are 4000 null traces, 1200 traces with specified Gaussian signals and
+the two unchanged legacy fixtures. A truth match requires an apex within one
+sample and one-to-one assignment; extra descriptions are reported separately.
+
+The paired results rule out adopting these variants as a verified fix:
+
+| Control (successful outputs only; errors separate) | Production | Full domain | Full domain + Bonferroni |
+| --- | ---: | ---: | ---: |
+| pt_03 descriptions (expected 0) | 2 | 4 | 0 |
+| pt_04 descriptions (expected 3) | 2 | 2 | 0 |
+| Narrow Gaussian truths matched / 300 | 295 | 295 | 0 |
+| Three-peak traces with all truths matched / 300 | 300 | 300 | 131 |
+| Overlap traces with both truths matched / 300 | 300 | 300 | 245 |
+| Flat log-noise: positive outputs / errors / 1000 | 944 / 20 | 930 / 65 | 10 / 0 |
+| Flat raw-noise: positive outputs / errors / 1000 | 936 / 39 | 900 / 95 | 16 / 0 |
+| Zero-clipped raw noise, sigma 24: positive / errors / 1000 | 16 / 0 | 18 / 0 | 0 / 0 |
+| Zero-clipped raw noise, sigma 2400: positive / errors / 1000 | 36 / 0 | 40 / 0 | 0 / 0 |
+
+The flat-noise cases have a positive baseline and do not establish the input
+precondition of baseline-free traces. Zero-clipped raw noise does not satisfy
+the homoscedastic Gaussian log-error model either. These counts characterize
+specified synthetic inputs, not instrument false-alarm rates, real-file FDR or
+uncertainty coverage. A multiplicity bound additionally requires valid
+per-window tests under the specified null; correcting alpha alone cannot
+establish that premise. The narrow-peak loss demonstrates a power cost even
+with strong specified signals. Neither experimental domain/multiplicity
+variant is applied to production. Resolving pt_03/pt_04 still requires a
+scientifically specified null and error target consistent with sparse windows;
+changing their expected counts or loosening their tests is not a resolution.
+The paired input binary, private source variants, all per-trace results and
+error texts are supplied locally for reproduction, not committed as a new
+production acceptance rule. RT/area corrections remain deferred.
+
+## Conditional height uncertainty and validation audit (preceding checkpoint)
 
 The reported `heightUncertainty` now uses the correct first-order derivative
 and intensity units for H = exp(b0-b1^2/(4*b23)). Given the existing supplied
