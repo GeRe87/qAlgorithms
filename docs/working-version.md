@@ -13,8 +13,10 @@ The complete synthetic workflow detects the two known signals at their expected
 m/z and retention time in positive, negative, and mixed-polarity files. A linear
 null-model correction and conservative selection among existing valid fits now
 also handle several synthetic overlapping-peak cases. Complete processing of
-representative real profile data is still blocked by ambiguous EIC peak
-selection. A diagnostic partial export is not a successful complete CLI run.
+the supplied real profile data now succeeds with explicitly marked collective
+signal descriptions. This is complete processing under that output policy,
+not a resolved compound count or a quantitative area validation. Earlier
+partial exports remain historical diagnostics.
 
 The legacy qPeaks suite retains unresolved cases (`pt_04`, expected three peaks,
 and `pt_03`, expected no peaks). The reflected three-peak grouping regression is now fixed and included in
@@ -79,6 +81,99 @@ The new regression passes in native Debug and Release. Full CTest remains 6/10
 with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
+
+## Closed collective envelopes (current continuation)
+
+The six previously failing positive EICs now complete without weakening the
+statistical cascade. A conflict component can have accepted full-window models
+whose apices lie in another component. The earlier fallback rejected these at
+the first component boundary. The new fallback closes the candidate's integer
+apex bracket together with the seed envelope and neighbouring unprotected
+components. It repeats inclusion until both the bounds and membership stop
+growing. A model must cover the complete resulting envelope. Among possible
+expansions it uses the shortest closed interval; equally short distinct
+intervals/memberships remain an explicit ambiguity error. It then compares
+eligible existing accepted models by SSE on that same closed interval.
+Unselected models from stable apex groups are still excluded.
+
+Protected fits remain separate, including protected peaks inside an expanded
+RT envelope. They are neither removed nor listed as unresolved anchors. Every
+expanded representative must be compatible with all protected fits globally,
+including components processed later. A regression exposes why checking only
+the model that proposed the envelope is insufficient: a lower-SSE alternative
+can otherwise conflict with a future protected peak. The final pairwise
+compatibility check is also explicit. A collective area's value must not be
+summed as analyte quantity with overlapping individual fit areas.
+
+If expansion joins a previously processed component, provisional selections
+and newly appended metadata are discarded and selection restarts with the
+combined membership. Pre-existing metadata is retained. Each retry either
+joins components, increases an integer bound, or enables the expanded pool for
+the first time. A proven infeasible mandatory subset remains infeasible in its
+superset; a budget-limited subset remains labelled unproven (reason 2), rather
+than receiving a fabricated infeasibility proof. This is a representation
+change using accepted models, not a refit, interpolation or area correction.
+The strict default API and centroiding do not enable collective expansions.
+
+New synthetic regressions cover reflected inputs, reversed candidate order,
+backward joins and metadata rollback, an intact protected peak inside the
+collective envelope, an independent neighbour, insufficient post-closure
+coverage, incompatible protected fits, a genuinely feasible assignment stopped
+by a tiny search budget, and equally small ambiguous alternatives. Running the
+new regressions against the previous selector reproduces the coverage error;
+omitting the new global protection reproduces the future-protected-fit error.
+No original assertion, expected count, threshold or failure status is relaxed.
+
+Native Release, standard Debug (`-g`, assertions enabled), and optimised Debug
+(`-Og -g`, assertions enabled) all build and pass the numerical regressions and
+15 generated CLI scenarios. Full CTest remains 6/10 with exactly the four
+retained failing targets (`test_qpeaks`, `test_qpeaks_pt03`, `test_qpeaks_pt04`,
+`test_utils`). A fresh 1637-row candidate/cascade audit is identical to the
+previous verified audit: pt_03 reports 2 instead of 0; pt_04 reports 2 instead
+of 3. The weak pt_04 candidate has F=102.483588811 versus 199.5 at alpha=0.05.
+These cases are not fixed by collective grouping or by changing their tests.
+
+The production CLI completes the entire real input in Release with exit status
+0: all 7017 positive EICs yield 19884 descriptions and all 9490 negative EICs
+yield 18640 descriptions, without skipping failed EICs. All four CSVs pass the
+numeric, ordering, metadata-count, bounds and companion-integrity audits.
+All 19692 earlier positive partial descriptions and their maximum metadata
+remain unchanged; exactly 192 descriptions are added from the six repaired
+EICs. The entire negative main/companion pair remains byte-identical to the
+previous verified complete result. The final global protection check also
+leaves all four successful real-output files byte-identical. Release reports
+314.264 seconds CPU time for the full file; this is an observed run, not a
+controlled benchmark. The full optimised Debug assertion run is still pending
+at this code checkpoint; standard Debug verification below covers all six
+repaired real EICs and the complete synthetic/regression suite.
+
+The six repaired EICs have 49, 33, 40, 30, 19 and 21 descriptions respectively
+(IDs 180, 432, 1664, 2190, 3494, 3902). Their isolated CSV pairs are byte-identical
+in standard unoptimised Debug and Release. A measured-trace instrumented audit
+checks every field of all 61 retained protected fits and assigns each of the
+768 originally supported maxima to exactly one output description. This is
+conservation of the selector's supported maxima, not proof of feature recall.
+
+The complete output has 2736 positive collective descriptions (2719 infeasible,
+17 search-limited; 33170 maximum-anchor rows) and 1894 negative collectives
+(1880 infeasible, 14 search-limited; 21187 maximum-anchor rows). The ordinary
+rows number 17148 positive and 16746 negative. Input hash and 715 scans per
+polarity remain unchanged. There is no failed-EIC skip mode in the production
+CLI. No `PARTIAL` list is promoted to a full result.
+
+The per-window timing audit now covers all 19884 positive and 18640 negative
+rows directly from their actual EIC samples. Both the audit and the production
+path return the same CSV pair per polarity. Median interval CV is 0.05033796
+positive and 0.04093320 negative; 6306 and 6225 windows respectively have CV
+above 0.2. These are descriptive interval statistics, not an area error estimate
+or a new acceptance rule. Every row remains quantitatively area-unvalidated.
+Irregular sampling, missing EIC scans, unknown false positives/recall, uncertain
+analyte counts, overlapping model quantities and the legacy test failures remain
+limits. The equidistant regression and precomputed matrices are unchanged;
+interpolation and area corrections remain explicitly deferred by the user.
+
+The following collective-policy sections record previous checkpoints. Their
+six-EIC failure and partial-list counts are superseded by this continuation.
 
 ## Explicit collective descriptions (native Windows continuation)
 
@@ -607,13 +702,12 @@ mode and does not change the CLI's failure status.
 
 ## Next acceptance work
 
-1. Resolve ambiguous real-data EIC selection, the legacy `pt_03` / `pt_04`
-   cases without weakening expected
-   behavior or silently discarding ambiguous regions.
-2. Account for irregular retention-time spacing before validating areas,
-   shapes and uncertainties quantitatively.
-3. Achieve a complete strict CLI run on representative profile mzML data;
-   then compare feature locations and quantities with known signals or an
-   agreed independent reference analysis.
-4. Resolve the remaining native Windows test failures, and measure
-   time and memory on successful realistic-file runs before broader use.
+1. Resolve the retained `pt_03` / `pt_04` expectations through a justified
+   statistical/model decision while keeping their failures visible until then.
+2. Quantitatively validate areas, shapes and uncertainties with known signals;
+   work on irregular RT spacing remains explicitly deferred by the user.
+3. Compare the now complete collective-policy outputs with an independent
+   reference before claiming compound counts, recall or false-positive rates.
+4. Resolve the native exact inverse-beta equality test and profile the expensive
+   joint selection, particularly in unoptimised Debug. A state-count search
+   budget does not bound elapsed time.

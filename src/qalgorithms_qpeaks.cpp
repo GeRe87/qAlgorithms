@@ -19,6 +19,7 @@
 #include <set>
 #include <functional>
 #include <array>
+#include <map>
 #if defined(_WIN32) && !defined(_USE_MATH_DEFINES)
     #define _USE_MATH_DEFINES // relevant for windows to have math constants
 #endif
@@ -723,6 +724,19 @@ namespace qAlgorithms
             for (size_t j = i + 1; j < choices.size(); ++j)
                 if (low[i] - high[j] <= resolution && low[j] - high[i] <= resolution)
                     parent[root(j)] = root(i);
+        // A failed component may need a larger collective envelope. Retrying
+        // discards provisional selections/metadata, never accepted regressions.
+        const auto fixedSelection = selected;
+        const size_t previousDescriptions = unresolvedGroups ? unresolvedGroups->size() : 0;
+        std::vector<size_t> expandedLeft(choices.size(), length), expandedRight(choices.size(), 0);
+        std::vector<uint8_t> expansionReason(choices.size(), 0);
+        bool retry = false;
+        do
+        {
+        retry = false;
+        selected = fixedSelection;
+        coalescedGroups = 0;
+        if (unresolvedGroups) unresolvedGroups->resize(previousDescriptions);
         for (size_t component = 0; component < choices.size(); ++component)
         {
             if (root(component) != component)
@@ -822,8 +836,8 @@ namespace qAlgorithms
             };
             const size_t componentStart = selected.size();
             const size_t expected = componentStart + members.size();
-            bool limited = false;
-            bool geometricallyImpossible = false;
+            bool limited = expansionReason[component] == UnresolvedPeak::SearchLimit;
+            bool geometricallyImpossible = expansionReason[component] == UnresolvedPeak::Infeasible;
             if (members.size() > 1)
             {
                 int32_t commonStart = INT32_MIN, commonEnd = INT32_MAX;
@@ -844,10 +858,14 @@ namespace qAlgorithms
                 }
                 // A common window forces every chosen pair to overlap. With
                 // at most one protected group no stable/stable exemption exists.
-                geometricallyImpossible = protectedGroups <= 1 && commonStart <= commonEnd &&
-                    lastApex-firstApex <= double(members.size()-1)*resolution;
+                geometricallyImpossible = geometricallyImpossible ||
+                    (protectedGroups <= 1 && commonStart <= commonEnd &&
+                     lastApex-firstApex <= double(members.size()-1)*resolution);
             }
-            try { if (!geometricallyImpossible) search(0, 0); }
+            // A failed mandatory subset remains infeasible in its superset;
+            // a search-limited subset remains explicitly unproven. Expanding
+            // a description does not restart its statistical/joint fit search.
+            try { if (!geometricallyImpossible && !limited) search(0, 0); }
             catch (const SearchLimit &)
             {
                 selected.resize(componentStart);
@@ -873,6 +891,11 @@ namespace qAlgorithms
                         eligibleApexGroups[(size_t)apexGroups[option.second]] = true;
                     }
                 }
+                if (expansionReason[component])
+                {
+                    minimumApex = std::min(minimumApex, double(expandedLeft[component]));
+                    maximumApex = std::max(maximumApex, double(expandedRight[component]));
+                }
                 UnresolvedPeak group;
                 group.reason = limited ? UnresolvedPeak::SearchLimit : UnresolvedPeak::Infeasible;
                 for (const auto &maximum : originalMaxima)
@@ -897,6 +920,13 @@ namespace qAlgorithms
                     if (support[i] < 0 && !initiallySelected[i] &&
                         conflictingGroups[(size_t)apexGroups[i]] && eligibleApexGroups[(size_t)apexGroups[i]])
                         eligible[i] = true;
+                if (expansionReason[component])
+                    for (size_t i = 0; i < count; ++i)
+                        eligible[i] = !initiallySelected[i] && conflictingGroups[(size_t)apexGroups[i]];
+                std::vector<size_t> globalProtected;
+                if (expansionReason[component])
+                    for (size_t i = 0; i < count; ++i)
+                        if (initiallySelected[i]) globalProtected.push_back(i);
                 size_t representative = count;
                 double bestError = INFINITY;
                 for (size_t i = 0; i < count; ++i)
@@ -910,6 +940,11 @@ namespace qAlgorithms
                     bool allowed = true;
                     for (size_t other : selected)
                         if (!compatible(i, other)) { allowed = false; break; }
+                    // Expanded envelopes can cross a protected component that
+                    // is processed later. Its fixed fits constrain every model,
+                    // not only the model that proposed the envelope expansion.
+                    for (size_t other : globalProtected)
+                        if (!compatible(i, other)) { allowed = false; break; }
                     if (!allowed) continue;
                     double error = 0;
                     for (size_t p = left; p <= right; ++p)
@@ -920,7 +955,122 @@ namespace qAlgorithms
                     if (error < bestError) { bestError = error; representative = i; }
                 }
                 if (representative == count)
-                    throw std::runtime_error("No accepted fit covers the complete unresolved region.");
+                {
+                    struct Block
+                    {
+                        size_t key, first, last;
+                        double low, high;
+                        bool protectedFit;
+                    };
+                    std::vector<Block> blocks;
+                    std::vector<size_t> protectedFits;
+                    for (size_t i = 0; i < count; ++i)
+                        if (initiallySelected[i]) protectedFits.push_back(i);
+                    for (size_t k = 0; k < choices.size(); ++k)
+                    {
+                        if (root(k) != k) continue;
+                        Block block{k, length, 0, INFINITY, -INFINITY, false};
+                        for (size_t j = 0; j < choices.size(); ++j)
+                            if (root(j) == k)
+                            {
+                                block.first = std::min(block.first, maxima[j].first);
+                                block.last = std::max(block.last, maxima[j].last);
+                                block.low = std::min(block.low, low[j]);
+                                block.high = std::max(block.high, high[j]);
+                                for (const auto &option : choices[j])
+                                    block.protectedFit = block.protectedFit || initiallySelected[option.second];
+                            }
+                        if (expansionReason[k])
+                        {
+                            block.low = std::min(block.low, double(expandedLeft[k]));
+                            block.high = std::max(block.high, double(expandedRight[k]));
+                        }
+                        blocks.push_back(block);
+                    }
+                    struct Expansion
+                    {
+                        size_t left, right;
+                        std::vector<size_t> roots;
+                    };
+                    std::map<std::pair<size_t,size_t>, Expansion> closures;
+                    Expansion best{length, 0, {}};
+                    bool ambiguous = false;
+                    // Only existing accepted models may propose an expansion.
+                    // Integer apex brackets give a finite, reflection-symmetric
+                    // envelope and allow exact reuse for models in the same cell.
+                    for (size_t i = 0; i < count; ++i)
+                    {
+                        const auto &reg = validRegressions->at(i);
+                        if (initiallySelected[i] || !conflictingGroups[(size_t)apexGroups[i]] ||
+                            reg.span.startIdx > (int32_t)left || reg.span.endIdx() < (int32_t)right)
+                            continue;
+                        bool protectedCompatible = true;
+                        for (size_t other : protectedFits)
+                            if (!compatible(i, other)) { protectedCompatible = false; break; }
+                        if (!protectedCompatible) continue;
+                        const auto cell = std::make_pair((size_t)std::floor(reg.position),
+                                                         (size_t)std::ceil(reg.position));
+                        auto cached = closures.find(cell);
+                        if (cached == closures.end())
+                        {
+                            Expansion plan{std::min(left, cell.first), std::max(right, cell.second), {component}};
+                            bool changed = true;
+                            while (changed)
+                            {
+                                changed = false;
+                                for (const auto &block : blocks)
+                                {
+                                    // Protected descriptions remain separate even
+                                    // inside a collective's RT envelope. Actual
+                                    // representative compatibility is mandatory.
+                                    if (block.protectedFit) continue;
+                                    const bool included = std::find(plan.roots.begin(), plan.roots.end(), block.key) != plan.roots.end();
+                                    if (!included && !(block.low <= double(plan.right)+resolution &&
+                                                       block.high >= double(plan.left)-resolution) &&
+                                        !(block.first <= plan.right && block.last >= plan.left))
+                                        continue;
+                                    if (!included) { plan.roots.push_back(block.key); changed = true; }
+                                    const size_t newLeft = std::min({plan.left, block.first, (size_t)std::floor(block.low)});
+                                    const size_t newRight = std::max({plan.right, block.last, (size_t)std::ceil(block.high)});
+                                    changed = changed || newLeft != plan.left || newRight != plan.right;
+                                    plan.left = newLeft; plan.right = newRight;
+                                }
+                            }
+                            std::sort(plan.roots.begin(), plan.roots.end());
+                            cached = closures.emplace(cell, std::move(plan)).first;
+                        }
+                        const auto &plan = cached->second;
+                        if (plan.right >= length || reg.span.startIdx > (int32_t)plan.left ||
+                            reg.span.endIdx() < (int32_t)plan.right)
+                            continue;
+                        // Every retry must enlarge a bound, join components,
+                        // or enable the expanded candidate pool for the first time.
+                        if (expansionReason[component] && plan.roots.size() == 1 &&
+                            plan.left == left && plan.right == right)
+                            continue;
+                        const size_t width = plan.right-plan.left;
+                        if (best.roots.empty() || width < best.right-best.left)
+                        { best = plan; ambiguous = false; }
+                        else if (width == best.right-best.left &&
+                                 (plan.left != best.left || plan.right != best.right || plan.roots != best.roots))
+                            ambiguous = true;
+                    }
+                    if (best.roots.empty())
+                        throw std::runtime_error("No accepted fit covers the complete unresolved region with compatible protected neighbours.");
+                    if (ambiguous)
+                        throw std::runtime_error("Equally small collective expansions are ambiguous.");
+                    uint8_t reason = group.reason;
+                    for (size_t key : best.roots)
+                        if (expansionReason[key] == UnresolvedPeak::Infeasible)
+                            reason = UnresolvedPeak::Infeasible;
+                    const size_t combinedRoot = best.roots.front();
+                    for (size_t key : best.roots) parent[key] = combinedRoot;
+                    expandedLeft[combinedRoot] = best.left;
+                    expandedRight[combinedRoot] = best.right;
+                    expansionReason[combinedRoot] = reason;
+                    retry = true;
+                    break;
+                }
                 group.resultIndex = representative;
                 unresolvedGroups->push_back(std::move(group));
                 selected.push_back(representative);
@@ -929,7 +1079,12 @@ namespace qAlgorithms
             }
             selected = std::move(bestSelection);
         }
+        } while (retry);
         assert(selected.size() == fixedCount + choices.size() - coalescedGroups);
+        for (size_t i = 0; i < selected.size(); ++i)
+            for (size_t j = i+1; j < selected.size(); ++j)
+                if (!compatible(selected[i], selected[j]))
+                    throw std::runtime_error("Selected collective descriptions conflict with a neighbouring fit.");
         for (auto &reg : *validRegressions)
             reg.isValid = false;
         for (size_t i : selected)

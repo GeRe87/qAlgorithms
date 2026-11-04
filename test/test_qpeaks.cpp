@@ -649,6 +649,155 @@ static void test_three_mandatory_groups_inside_two_resolution_intervals()
            "A clearly resolved stable neighbour must remain unchanged beside a collective", NULL);
 }
 
+static void test_collective_expansion_closes_neighbours_without_replacing_stable_peaks()
+{
+    const std::vector<std::vector<float>> positions = {
+        {2.60F,2.71F,3.58F,3.95F},
+        {5.15F,5.19F,5.84F,5.97F,6.72F,6.91F},
+        {7.53F,7.54F,7.82F,8.02F,8.06F,8.43F,8.55F}};
+    const auto fit = [](float apex, int32_t start, int32_t length) {
+        RegressionGauss r;
+        r.position=apex; r.span={start,length};
+        r.coeffs.x0=start+length/2; r.coeffs.scale=(length-1)/2;
+        const double d=double(apex)-r.coeffs.x0;
+        r.coeffs.b0=std::log(100.0)-0.15*d*d;
+        r.coeffs.b1=0.3*d; r.coeffs.b2=r.coeffs.b3=-0.15;
+        return r;
+    };
+    std::vector<float> y(39,5);
+    y[3]=100; y[6]=90; y[8]=95; y[12]=120; y[16]=110; y[21]=100;
+    std::vector<RegressionGauss> base;
+    std::vector<int16_t> groups;
+    for(const auto &domain:positions) for(float apex:domain)
+    {
+        const int center=apex<4?3:(apex<7?6:9);
+        base.push_back(fit(apex,center-3,7)); groups.push_back(0);
+    }
+    const size_t bridge=base.size(); base.push_back(fit(16,0,25)); groups.push_back(1);
+    const size_t stable=base.size(); base.push_back(fit(12,10,5)); groups.push_back(2); base.back().isValid=true;
+    const size_t neighbour=base.size(); base.push_back(fit(21,19,7)); groups.push_back(3);
+    const std::vector<bool> conflicting={true,true,false,true};
+    auto candidates=base;
+    bool rejected=false;
+    try { resolveApexGroups(&candidates,y.data(),y.size(),groups.data(),conflicting); }
+    catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("No compatible accepted fits")!=std::string::npos; }
+    assert(rejected,"Strict selection must still reject the impossible mandatory subset",NULL);
+
+    for(bool reflected:{false,true}) for(bool reversed:{false,true})
+    {
+        candidates=base; auto input=y; auto labels=groups;
+        if(reflected)
+        {
+            std::reverse(input.begin(),input.end());
+            for(auto &r:candidates)
+            {
+                r.position=float(input.size()-1)-r.position;
+                r.span.startIdx=int32_t(input.size()-1)-r.span.endIdx();
+                r.coeffs.x0=int32_t(input.size()-1)-r.coeffs.x0;
+                r.coeffs.b1=-r.coeffs.b1; std::swap(r.coeffs.b2,r.coeffs.b3);
+            }
+        }
+        auto expected=candidates;
+        if(reversed) { std::reverse(candidates.begin(),candidates.end()); std::reverse(labels.begin(),labels.end()); }
+        std::vector<UnresolvedPeak> metadata(1); metadata[0].start=987; metadata[0].resultIndex=654;
+        resolveApexGroups(&candidates,input.data(),input.size(),labels.data(),conflicting,&metadata);
+        assert(metadata.size()==2 && metadata[0].start==987 && metadata[0].resultIndex==654,
+               "Restarting expanded components must preserve existing metadata and append exactly one description",NULL);
+        const auto &collective=metadata[1];
+        assert(collective.reason==UnresolvedPeak::Infeasible &&
+               collective.start==(reflected?22U:2U) && collective.end==(reflected?36U:16U) &&
+               collective.maximaIndices==(reflected?std::vector<uint32_t>{22,30,32,35}:std::vector<uint32_t>{3,6,8,16}),
+               "Expansion must include all neighbouring unresolved maxima, independent of reflection or candidate order",NULL);
+        const auto index=[&](size_t i){return reversed?candidates.size()-1-i:i;};
+        assert(collective.resultIndex==index(bridge),"The existing covering bridge must represent the expanded region",NULL);
+        size_t selected=0;
+        for(const auto &r:candidates) selected+=r.isValid;
+        assert(selected==3,"The collective, protected interior peak and independent neighbour must all remain",NULL);
+        for(size_t i:{bridge,stable,neighbour})
+        {
+            expected[i].isValid=true;
+            assert(same_peak_description(candidates[index(i)],expected[i]),
+                   "Expansion must preserve every selected fit's coefficients and quantitative properties",NULL);
+        }
+    }
+
+    // A lower-SSE broad alternative near a not-yet-processed protected peak
+    // must not replace the safe bridge chosen to propose the expanded envelope.
+    candidates=base; auto lateProtectedLabels=groups;
+    auto incompatibleBridge=fit(14.5F,0,25);
+    const double displacement=14.5-incompatibleBridge.coeffs.x0;
+    incompatibleBridge.coeffs.b0=std::log(45.0)-0.005*displacement*displacement;
+    incompatibleBridge.coeffs.b1=0.01*displacement;
+    incompatibleBridge.coeffs.b2=incompatibleBridge.coeffs.b3=-0.005;
+    candidates.push_back(incompatibleBridge); lateProtectedLabels.push_back(1);
+    std::vector<UnresolvedPeak> lateProtected;
+    resolveApexGroups(&candidates,y.data(),y.size(),lateProtectedLabels.data(),conflicting,&lateProtected);
+    assert(lateProtected.size()==1 && lateProtected[0].resultIndex==bridge &&
+           same_peak_description(candidates[stable],base[stable]) && !candidates.back().isValid,
+           "Every expanded model must respect protected fits in future components, even if its SSE is lower",NULL);
+
+    // Unlike the geometric impossibility above, this enlarged domain has a
+    // complete feasible assignment. A budget stop must stay explicitly unproven.
+    candidates=base; auto feasibleLabels=groups;
+    candidates.resize(bridge+1); feasibleLabels.resize(bridge+1);
+    const std::vector<bool> feasibleGroups={true,true};
+    candidates.push_back(fit(2.4F,0,7)); feasibleLabels.push_back(0);
+    candidates.push_back(fit(5.45F,3,7)); feasibleLabels.push_back(0);
+    const auto feasibleInput=candidates;
+    resolveApexGroups(&candidates,y.data(),y.size(),feasibleLabels.data(),feasibleGroups);
+    size_t resolved=0; for(const auto &r:candidates) resolved+=r.isValid;
+    assert(resolved==4,"The expanded-domain control must have a fully feasible resolved assignment",NULL);
+    candidates=feasibleInput;
+    std::vector<UnresolvedPeak> limited;
+    resolveApexGroups(&candidates,y.data(),y.size(),feasibleLabels.data(),feasibleGroups,&limited,1);
+    assert(limited.size()==1 && limited[0].reason==UnresolvedPeak::SearchLimit &&
+           limited[0].maximaIndices==std::vector<uint32_t>({3,6,8,16}),
+           "Expansion after a genuine budget stop must never assert proven infeasibility",NULL);
+
+    candidates=base; auto blocked=y;
+    blocked[12]=5; blocked[18]=120;
+    candidates[stable]=fit(18,17,5); candidates[stable].isValid=true;
+    const auto protectedFit=candidates[stable];
+    std::vector<UnresolvedPeak> metadata;
+    rejected=false;
+    try { resolveApexGroups(&candidates,blocked.data(),blocked.size(),groups.data(),conflicting,&metadata); }
+    catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("covers the complete unresolved region")!=std::string::npos; }
+    assert(rejected && metadata.empty() && same_peak_description(candidates[stable],protectedFit),
+           "An expanded representative incompatible with a protected peak must be rejected without replacing it",NULL);
+
+    candidates=base; auto truncated=y;
+    truncated[19]=105; truncated[21]=5;
+    candidates[bridge]=fit(16,0,19);
+    candidates[neighbour]=fit(18.9F,17,7);
+    metadata.clear(); rejected=false;
+    try { resolveApexGroups(&candidates,truncated.data(),truncated.size(),groups.data(),conflicting,&metadata); }
+    catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("covers the complete unresolved region")!=std::string::npos; }
+    assert(rejected && metadata.empty(),"A bridge covering only the seed cannot omit a maximum acquired by closure",NULL);
+
+    std::vector<float> ambiguous(33,5);
+    ambiguous[6]=110; ambiguous[13]=100; ambiguous[16]=90; ambiguous[18]=95; ambiguous[25]=110;
+    candidates.clear();
+    std::vector<int16_t> ambiguousLabels;
+    for(const auto &domain:positions) for(float apex:domain)
+    {
+        const int center=apex<4?3:(apex<7?6:9);
+        candidates.push_back(fit(apex+10,center+7,7)); ambiguousLabels.push_back(0);
+    }
+    candidates.push_back(fit(6,4,16)); ambiguousLabels.push_back(1);
+    candidates.push_back(fit(25,12,16)); ambiguousLabels.push_back(2);
+    const std::vector<bool> ambiguousGroups={true,true,true};
+    const auto ambiguousFits=candidates;
+    for(bool reversed:{false,true})
+    {
+        candidates=ambiguousFits; auto labels=ambiguousLabels;
+        if(reversed) { std::reverse(candidates.begin(),candidates.end()); std::reverse(labels.begin(),labels.end()); }
+        metadata.clear(); rejected=false;
+        try { resolveApexGroups(&candidates,ambiguous.data(),ambiguous.size(),labels.data(),ambiguousGroups,&metadata); }
+        catch(const std::runtime_error &e) { rejected=std::string(e.what()).find("Equally small collective expansions")!=std::string::npos; }
+        assert(rejected && metadata.empty(),"Equally small opposite expansions must not be chosen by iteration order",NULL);
+    }
+}
+
 static void test_collective_metadata_tracks_offsets_and_retention_times()
 {
     std::vector<float> x(61), y(61);
@@ -1488,6 +1637,7 @@ int main(int argc, const char *argv[])
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
     test_three_mandatory_groups_inside_two_resolution_intervals();
+    test_collective_expansion_closes_neighbours_without_replacing_stable_peaks();
     test_collective_metadata_tracks_offsets_and_retention_times();
     test_valley_uses_adjacent_maximum_after_merging();
     test_compatibility_witnesses_match_exhaustive_options();

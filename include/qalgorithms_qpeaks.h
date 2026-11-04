@@ -17,6 +17,9 @@ namespace qAlgorithms
     // Optional collective description: resultIndex indexes the appended result
     // vector; start/end and plateau-first maximaIndices index the original input.
     // Bounds are inclusive and cover the observed/fitted-apex hypothesis envelope.
+    // A closed expansion may span separately retained protected peaks; only
+    // the maxima owned by this unresolved description appear in maximaIndices.
+    // Representative-fit areas and overlapping individual areas are not additive.
     // Infeasible means no joint assignment exists; SearchLimit means unproven
     // within the explicit budget. Neither establishes a physical peak count.
     struct UnresolvedPeak
