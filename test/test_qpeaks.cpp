@@ -13,6 +13,7 @@
 #include "common_test_utils.hpp"
 
 using namespace qAlgorithms;
+static bool same_peak_description(const RegressionGauss &a, const RegressionGauss &b);
 
 // @todo test these specific values with qpeaks:
 
@@ -498,6 +499,12 @@ static void test_joint_search_propagates_constraints_without_dropping_groups()
     assert(selected == std::vector<float>({2.5F,6,9.5F}),
            "Joint search must find the unique feasible three-group assignment", NULL);
     candidates = original;
+    std::vector<UnresolvedPeak> limitedDescriptions;
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &limitedDescriptions, 1);
+    assert(limitedDescriptions.size()==1 && limitedDescriptions[0].reason==UnresolvedPeak::SearchLimit &&
+           limitedDescriptions[0].maximaIndices==std::vector<uint32_t>({3,6,9}),
+           "A genuinely unfinished search must not be labelled proven infeasible",NULL);
+    candidates = original;
     candidates.erase(candidates.begin()); // Remove the sole feasible left option.
     groups.assign(candidates.size(), 0);
     bool rejected = false;
@@ -566,11 +573,186 @@ static void test_three_mandatory_groups_inside_two_resolution_intervals()
         }
     std::vector<int16_t> groups(candidates.size(), 0);
     const std::vector<bool> conflicting = {true};
+    const auto original = candidates;
     bool rejected = false;
     try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting); }
     catch (const std::runtime_error &error)
     { rejected = std::string(error.what()).find("No compatible accepted fits") != std::string::npos; }
     assert(rejected, "Impossible mandatory groups must not succeed by silently omitting a maximum", NULL);
+
+    std::vector<UnresolvedPeak> descriptions;
+    candidates = original;
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &descriptions);
+    assert(descriptions.size() == 1 && descriptions[0].reason == UnresolvedPeak::Infeasible &&
+           descriptions[0].maximaIndices == std::vector<uint32_t>({3,6,8}) &&
+           descriptions[0].start == 2 && descriptions[0].end == 9,
+           "An explicit collective must cover every supported maximum and the entire apex hypothesis envelope", NULL);
+    size_t count = 0;
+    for (const auto &reg : candidates) count += reg.isValid;
+    assert(count == 1 && candidates[descriptions[0].resultIndex].isValid,
+           "Exactly one unchanged accepted fit represents this unresolved component", NULL);
+    auto unchangedFit = original[descriptions[0].resultIndex]; unchangedFit.isValid = true;
+    assert(same_peak_description(candidates[descriptions[0].resultIndex], unchangedFit),
+           "A collective may change selection only, never fit coefficients or properties", NULL);
+
+    candidates = original; descriptions.clear();
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &descriptions, 1);
+    assert(descriptions.size() == 1 && descriptions[0].reason == UnresolvedPeak::Infeasible &&
+           descriptions[0].maximaIndices == std::vector<uint32_t>({3,6,8}),
+           "A geometric proof must precede search-budget uncertainty", NULL);
+
+    candidates = original; descriptions.clear();
+    for (auto &reg : candidates)
+    {
+        const int center = reg.position < 4 ? 3 : (reg.position < 7 ? 6 : 9);
+        reg.span = {center-3,7}; reg.coeffs.x0 = center; reg.coeffs.scale = 3;
+        reg.coeffs.b0 = std::log(100.0)-0.15*(reg.position-center)*(reg.position-center);
+        reg.coeffs.b1 = 0.3*(reg.position-center);
+    }
+    rejected = false;
+    try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &descriptions); }
+    catch (const std::runtime_error &error)
+    { rejected = std::string(error.what()).find("covers the complete unresolved region") != std::string::npos; }
+    assert(rejected && descriptions.empty(), "A truncated representative cannot stand in for the whole region", NULL);
+    for (auto &reg : candidates) reg.isValid=false; // Failed selection results are not reusable.
+    RegressionGauss bridge = original[0];
+    bridge.position = 4.6F;
+    bridge.coeffs.b0 = std::log(100.0)-0.15*(bridge.position-6)*(bridge.position-6);
+    bridge.coeffs.b1 = 0.3*(bridge.position-6);
+    candidates.push_back(bridge); groups.push_back(0);
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &descriptions);
+    assert(descriptions.size()==1 && descriptions[0].resultIndex==candidates.size()-1 && candidates.back().isValid,
+           "An already accepted bridge fit may represent the complete collective without inventing a resolved maximum",NULL);
+    bridge.isValid=true;
+    assert(same_peak_description(candidates.back(),bridge),"The collective bridge fit must remain unchanged",NULL);
+
+    candidates = original; descriptions.clear(); groups.assign(candidates.size(),0);
+    candidates[0].isValid = true;
+    rejected = false;
+    try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting, &descriptions); }
+    catch (const std::runtime_error &error)
+    { rejected = std::string(error.what()).find("protected stable fit") != std::string::npos; }
+    assert(rejected && descriptions.empty() && candidates[0].isValid,
+           "A collective must not replace a protected fit", NULL);
+
+    candidates = original; descriptions.clear();
+    std::vector<float> withNeighbor = y; withNeighbor.resize(33,5); withNeighbor[26] = 120;
+    RegressionGauss stable;
+    stable.position = 26; stable.span = {20,13}; stable.coeffs.x0 = 26; stable.coeffs.scale = 6;
+    stable.coeffs.b0 = std::log(120.0); stable.coeffs.b2 = stable.coeffs.b3 = -0.5; stable.isValid = true;
+    candidates.push_back(stable); groups.push_back(1);
+    const std::vector<bool> withStable = {true,false};
+    resolveApexGroups(&candidates, withNeighbor.data(), withNeighbor.size(), groups.data(), withStable, &descriptions);
+    count = 0; for (const auto &reg : candidates) count += reg.isValid;
+    assert(count == 2 && descriptions.size() == 1 && candidates.back().isValid &&
+           same_peak_description(candidates.back(), stable),
+           "A clearly resolved stable neighbour must remain unchanged beside a collective", NULL);
+}
+
+static void test_collective_metadata_tracks_offsets_and_retention_times()
+{
+    std::vector<float> x(61), y(61);
+    for (size_t i=0;i<61;++i)
+    {
+        x[i]=20+0.6F*float(i);
+        const double z=(double(i)-30)/12;
+        y[i]=float(std::max(1.0,10000*std::exp(-0.5*z*z*z*z)*(1+0.1*std::sin(2*std::acos(-1.0)*double(i)/3))));
+    }
+    std::vector<RegressionGauss> base;
+    std::vector<UnresolvedPeak> groups;
+    qpeaks_find(y.data(),x.data(),nullptr,y.size(),&base,&groups);
+    assert(base.size()==1 && groups.size()==1 && groups[0].maximaIndices.size()>=2,
+           "The explicit flat-top fixture must remain one marked unresolved description", NULL);
+    std::vector<float> px={18.8F,19.4F}, py={1,1};
+    px.insert(px.end(),x.begin(),x.end());py.insert(py.end(),y.begin(),y.end());
+    std::vector<RegressionGauss> shifted(1);
+    std::vector<UnresolvedPeak> shiftedGroups(1);
+    qpeaks_find(py.data(),px.data(),nullptr,py.size(),&shifted,&shiftedGroups);
+    assert(shifted.size()==base.size()+1 && shiftedGroups.size()==groups.size()+1,
+           "Append semantics must preserve pre-existing results and group records", NULL);
+    assert(same_peak_description(shifted[0],RegressionGauss{}) && shiftedGroups[0].resultIndex==0 &&
+           shiftedGroups[0].start==0 && shiftedGroups[0].end==0 && shiftedGroups[0].maximaIndices.empty(),
+           "Previously stored results and metadata must remain untouched",NULL);
+    const auto &a=groups[0];const auto &b=shiftedGroups[1];
+    assert(b.resultIndex==a.resultIndex+1 && b.start==a.start+2 && b.end==a.end+2 &&
+           b.reason==a.reason && b.maximaIndices.size()==a.maximaIndices.size(),
+           "Unresolved coordinates must follow the original input after low-value prefixes", NULL);
+    for(size_t i=0;i<a.maximaIndices.size();++i)
+        assert(b.maximaIndices[i]==a.maximaIndices[i]+2,"No supported maximum may lose its input offset",NULL);
+    auto expected=base[0];expected.span.startIdx+=2;
+    assert(same_peak_description(shifted[1],expected),"Prefixing observations must preserve the unchanged representative fit",NULL);
+    EIC eic;eic.RT=x;eic.ints_area=y;eic.df.resize(y.size());
+    for(size_t i=0;i<y.size();++i)eic.df[i]=uint16_t(i+1);
+    eic.mz.assign(y.size(),100.125F);eic.DQSC.assign(y.size(),0.9F);
+    std::vector<EIC> eics={eic};std::vector<FeaturePeak> features;
+    findFeatures(&eics,&x,&features);
+    assert(features.size()==1 && features[0].unresolvedReason==a.reason &&
+           features[0].unresolvedLowerRT==x[a.start] && features[0].unresolvedUpperRT==x[a.end] &&
+           features[0].unresolvedMaximaRT.size()==a.maximaIndices.size(),
+           "Feature metadata must use the EIC's measured RT values",NULL);
+    for(size_t i=0;i<a.maximaIndices.size();++i)
+        assert(features[0].unresolvedMaximaRT[i]==x[a.maximaIndices[i]],"Every source maximum must survive feature conversion",NULL);
+}
+
+static void test_valley_uses_adjacent_maximum_after_merging()
+{
+    // The first two close maxima merge. Their outer boundary is the height
+    // 200 at index 5, not the earlier weak maximum 100 at index 3.
+    // The separating valley 120 is below both adjacent maxima (200,150).
+    const std::vector<float> y={5,10,40,100,80,200,170,120,130,140,150,80,10};
+    std::vector<RegressionGauss> candidates;
+    for (const float position : {3.0F,5.0F,10.0F})
+    {
+        RegressionGauss reg;reg.position=position;reg.span={0,13};
+        reg.coeffs.x0=6;reg.coeffs.scale=6;
+        const double height=position==3?100:(position==5?200:150);
+        reg.coeffs.b0=std::log(height)-0.2*(position-6)*(position-6);
+        reg.coeffs.b1=0.4*(position-6);reg.coeffs.b2=reg.coeffs.b3=-0.2;
+        candidates.push_back(reg);
+    }
+    candidates[2].isValid=true;const auto stable=candidates[2];
+    const int16_t groups[]={0,0,1};const std::vector<bool> conflicting={true,false};
+    resolveApexGroups(&candidates,y.data(),y.size(),groups,conflicting);
+    size_t count=0;for(const auto &reg:candidates)count+=reg.isValid;
+    assert(count==2 && candidates[2].isValid && same_peak_description(candidates[2],stable),
+           "The real separating valley must survive merging, with the stable neighbour unchanged",NULL);
+}
+
+static void test_compatibility_witnesses_match_exhaustive_options()
+{
+    const double resolution=3+2*FLT_EPSILON;
+    size_t trueCases=0,falseCases=0;
+    for(size_t trial=0;trial<100;++trial)
+    {
+        std::vector<RegressionGauss> fits(25);std::vector<bool> protectedFits(25,false);
+        std::vector<std::pair<double,size_t>> options;
+        for(size_t i=0;i<25;++i)
+        {
+            fits[i].span={int32_t((i*13+trial*7)%50),int32_t(5+(i*17+trial)%21)};
+            fits[i].position=float((i*19+trial*11)%70)+0.25F*float(i%4);
+            protectedFits[i]=(i+trial)%7==0;
+            if(trial%4==0 || trial%4==2)
+            { fits[i].span={0,30};fits[i].position=10+0.1F*float(i%3);protectedFits[i]=trial%4==0 && protectedFits[i]; }
+            else if(trial%4==1)
+            { fits[i].span={0,30};fits[i].position=i==17?13.5F:10.0F;protectedFits[i]=false; }
+            else
+            { fits[i].position=10.0F;protectedFits[i]=false;if(i==24)fits[i].span={0,80}; }
+            if(i<24)options.push_back({double(i),i});
+        }
+        const auto witnesses=compatibilityWitnesses(options,fits,protectedFits);
+        for(size_t query=0;query<25;++query)
+        {
+            const auto compatible=[&](size_t j){return (protectedFits[query]&&protectedFits[j]) ||
+                fits[query].span.endIdx()<fits[j].span.startIdx || fits[j].span.endIdx()<fits[query].span.startIdx ||
+                std::abs(fits[query].position-fits[j].position)>resolution;};
+            bool brute=false,shortcut=false;
+            for(const auto &option:options)brute=brute||compatible(option.second);
+            for(size_t witness:witnesses)if(witness!=SIZE_MAX)shortcut=shortcut||compatible(witness);
+            assert(brute==shortcut,"Extremal witnesses must exactly match exhaustive compatibility, including protected fits",NULL);
+            if(brute)++trueCases;else ++falseCases;
+        }
+    }
+    assert(trueCases>0 && falseCases>0,"The compatibility oracle must exercise supported and unsupported domains",NULL);
 }
 
 static void test_linear_null_model_residuals()
@@ -1306,6 +1488,9 @@ int main(int argc, const char *argv[])
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
     test_three_mandatory_groups_inside_two_resolution_intervals();
+    test_collective_metadata_tracks_offsets_and_retention_times();
+    test_valley_uses_adjacent_maximum_after_merging();
+    test_compatibility_witnesses_match_exhaustive_options();
     test_analytic_peak_conflicts();
     test_conflict_preserves_stable_neighbor();
     test_flat_maximum_is_one_group();

@@ -14,6 +14,20 @@ namespace qAlgorithms
 {
     // @todo rework this module so all centroiding / feature construction parts are in a separate block and qPeaks can be used as a library header
 
+    // Optional collective description: resultIndex indexes the appended result
+    // vector; start/end and plateau-first maximaIndices index the original input.
+    // Bounds are inclusive and cover the observed/fitted-apex hypothesis envelope.
+    // Infeasible means no joint assignment exists; SearchLimit means unproven
+    // within the explicit budget. Neither establishes a physical peak count.
+    struct UnresolvedPeak
+    {
+        static constexpr uint8_t Infeasible = 1, SearchLimit = 2;
+        size_t resultIndex = 0;
+        uint8_t reason = Infeasible;
+        uint32_t start = 0, end = 0;
+        std::vector<uint32_t> maximaIndices;
+    };
+
     // ### General Implementation ### //
 
     /// @brief This function serves as the central interface for performing peak detection on an arbitrary set of x and y data.
@@ -28,6 +42,11 @@ namespace qAlgorithms
     /// @param maxscale up to which scale regressions should be attempted. The maximum peak width (in points) is maxscale * 2 + 1.
     //                  If maxscale would exceed the length of x or y, it is set to (the length of either -1) / 2.
     /// @param result All found peaks are appended to this vector.
+    /// @param unresolvedGroups nullptr preserves strict selection (also used by centroiding).
+    ///        A supplied vector enables explicitly marked collective descriptions
+    ///        when a single existing accepted fit covers the entire unresolved
+    ///        envelope without replacing protected fits. Metadata is appended;
+    ///        fit quantities belong to that representative, not a sum of analytes.
     /// @return the total number of appended peaks. If this is < 0, the function did not execute correctly.
     /// @details Errorcodes:
     ///  0 = no valid peaks were found (this is not an error per se, when supplying ex. a constant y this is the expected result)
@@ -42,7 +61,8 @@ namespace qAlgorithms
         const float *x_values,
         const uint16_t *DF_cum,
         const size_t length,
-        std::vector<RegressionGauss> *result);
+        std::vector<RegressionGauss> *result,
+        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr);
 
     struct XML_File;                           // forward declaration so at least the header does not couple with read_file
     size_t findCentroids(const XML_File *data, // @todo the internal file representation should be more generic

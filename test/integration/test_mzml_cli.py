@@ -39,7 +39,8 @@ REQUIRED_COLUMNS = {
     "RT_Uncertainty", "area", "height", "DQSC", "DQSB", "DQSF",
 }
 PROFILE_CASES = ("positive", "negative", "mixed", "blank", "malformed", "centroided", "ms2_only")
-CLI_CASES = ("missing_output_value", "output_collision", "skip_error", "default_features")
+CLI_CASES = ("missing_output_value", "output_collision", "skip_error", "default_features",
+             "unresolved_trace_write_failure", "orphan_unresolved_trace", "orphan_feature_output", "collective_output")
 
 
 class TestFailure(RuntimeError):
@@ -111,7 +112,8 @@ def write_fixture(path: Path, *, polarity: str = "positive",
                   intensity_compressed: bool = False,
                   reverse_arrays: bool = False, rt_minutes: bool = False,
                   blank: bool = False, centroided: bool = False,
-                  ms_level: int = 1, intensity_scale: float = 1.0) -> None:
+                  ms_level: int = 1, intensity_scale: float = 1.0,
+                  collective: bool = False) -> None:
     root = ET.Element(f"{{{NS}}}mzML", {"id": "synthetic-smoke", "version": "1.1.0"})
     cv_list = element(root, "cvList", count="2")
     element(cv_list, "cv", id="MS", fullName="PSI-MS",
@@ -146,7 +148,7 @@ def write_fixture(path: Path, *, polarity: str = "positive",
     cv(method, "MS:1000544", "Conversion to mzML")
     run = element(root, "run", id="run1", defaultInstrumentConfigurationRef="IC1",
                   sampleRef="sample1")
-    scans = 8 if blank else 65
+    scans = 61 if collective else (8 if blank else 65)
     modes = ("positive", "negative") if polarity == "mixed" else (polarity,)
     spectrum_list = element(run, "spectrumList", count=str(scans * len(modes)),
                             defaultDataProcessingRef="DP1")
@@ -155,6 +157,14 @@ def write_fixture(path: Path, *, polarity: str = "positive",
         for mode in modes:
             rt = 10.0 + 0.5 * scan_number + (0.25 if mode == "negative" else 0.0)
             mz, intensity = profile(mode, rt, scan_number, blank)
+            if collective:
+                mz, intensity = profile(mode, EXPECTED[mode][0][1], scan_number, False)
+                z = (scan_number-30)/12
+                factor = max(0.0001, math.exp(-0.5*z**4)*(1+0.1*math.sin(2*math.pi*scan_number/3)))
+                # Normalise the analytical mass-Gaussian integral so the EIC
+                # has the same 10,000-unit plateau as the selector fixture.
+                area_scale = 10000/(150000*0.005*math.sqrt(2*math.pi))
+                mz, intensity = mz[:121], [value*factor*area_scale for value in intensity[:121]]
             if intensity_scale != 1.0:
                 intensity = [value * intensity_scale for value in intensity]
             spectrum_id = f"scan={len(spectrum_ids) + 1}"
@@ -255,12 +265,44 @@ def read_features(path: Path) -> list[dict[str, str]]:
             require(math.isfinite(number), f"Nonfinite {key}={value} in {path.name}")
         require(float(row["area"]) > 0 and float(row["height"]) > 0,
                 f"Nonpositive peak area or height in {path.name}")
+    status_columns = {"isUnresolved", "unresolvedReason", "unresolvedMaximaCount", "unresolvedLowerRT", "unresolvedUpperRT"}
+    require(status_columns <= set(reader.fieldnames or []), "Unresolved status columns must always be present")
+    trace_path = path.with_name(path.name.removesuffix("_features.csv") + "_unresolved_groups.csv")
+    require(trace_path.is_file(), f"Missing unresolved-group trace: {trace_path}")
+    with trace_path.open(newline="", encoding="utf-8") as stream:
+        trace_reader = csv.DictReader(stream)
+        require({"featureID", "binID", "maximumNumber", "retentionTime", "reason"} <= set(trace_reader.fieldnames or []), "Invalid unresolved trace schema")
+        trace = list(trace_reader)
+    known_ids = {row["ID"] for row in rows}
+    require(all(item["featureID"] in known_ids for item in trace), "Trace references an unknown feature")
+    for row in rows:
+        members = [item for item in trace if item["featureID"] == row["ID"]]
+        count = int(row["unresolvedMaximaCount"])
+        if row["isUnresolved"] == "0":
+            require(count == 0 and row["unresolvedReason"] == "0" and not members and
+                    float(row["unresolvedLowerRT"]) == 0 and float(row["unresolvedUpperRT"]) == 0,
+                    "Resolved features must not acquire collective metadata")
+        else:
+            require(row["isUnresolved"] == "1" and row["unresolvedReason"] in {"1", "2"} and count >= 2,
+                    "Collective status must identify its reason and supported maxima")
+            require(len(members) == count, "Collective maxima were lost from its trace")
+            lo, hi = float(row["unresolvedLowerRT"]), float(row["unresolvedUpperRT"])
+            require(float(row["lowestRetentionTime"])-1e-4 <= lo <= float(row["retentionTime"])+1e-4 and
+                    float(row["retentionTime"])-1e-4 <= hi <= float(row["highestRetentionTime"])+1e-4,
+                    "Collective region must be covered by its unchanged representative")
+            require(all(float(a["retentionTime"])<float(b["retentionTime"]) for a,b in zip(members,members[1:])),
+                    "Source maxima must remain unique and ordered")
+            require([int(item["maximumNumber"]) for item in members] == list(range(1,count+1)), "Trace maximum numbering is incomplete")
+            require(all(item["binID"] == row["binID"] and item["reason"] == row["unresolvedReason"] and
+                        float(row["unresolvedLowerRT"])-1e-4 <= float(item["retentionTime"]) <= float(row["unresolvedUpperRT"])+1e-4
+                        for item in members), "Trace must preserve origin, reason and region coverage")
     return rows
 
 
 def check_peaks(path: Path, polarity: str) -> None:
     rows = read_features(path)
     require(bool(rows), f"Feature CSV is empty for known synthetic peaks: {path}")
+    require(all(row["isUnresolved"] == "0" for row in rows), "Known resolved synthetic peaks must stay resolved")
     for mass, rt in EXPECTED[polarity]:
         matching = [row for row in rows
                     if abs(float(row["mz"]) - mass) <= 0.002
@@ -316,7 +358,46 @@ def run_cases(executable: Path, work_dir: Path, selected: str) -> None:
             continue
         case_dir = work_dir / name
         case_dir.mkdir()
-        if name == "missing_output_value":
+        if name == "collective_output":
+            input_path = case_dir / "unresolved plateau.mzML"
+            write_fixture(input_path, collective=True)
+            output = case_dir / "feature output"
+            process = run_program(executable, input_path, output, expect_success=True)
+            rows = read_features(output / "unresolved plateau_features.csv")
+            require(len(rows)==1 and rows[0]["isUnresolved"]=="1", "The ambiguous flat-top fixture must produce one marked collective")
+            require(abs(float(rows[0]["mz"])-EXPECTED["positive"][0][0])<0.002, "Collective must preserve its mass bin")
+            require("explicitly marked unresolved" in process.stderr, "A successful collective output must remain visible in the CLI")
+        elif name in {"unresolved_trace_write_failure", "orphan_unresolved_trace"}:
+            input_path = case_dir / "sample.mzML"
+            write_fixture(input_path)
+            output = case_dir / "feature output"
+            output.mkdir()
+            trace = output / "sample_unresolved_groups.csv"
+            if name == "unresolved_trace_write_failure":
+                trace.mkdir()
+                process = run_command(executable, ["-i", str(input_path), "-o", str(output), "--printfeatures"], case_dir, expect_success=False)
+                require("unresolved-group trace" in process.stderr, "A missing companion must fail visibly")
+                require(trace.is_dir(), "The blocking directory must not be replaced")
+            else:
+                trace.write_text("preserve this prior trace\n", encoding="utf-8")
+                run_command(executable, ["-i", str(input_path), "-o", str(output), "--printfeatures", "--skip-existing"], case_dir, expect_success=False)
+                require(trace.read_text(encoding="utf-8") == "preserve this prior trace\n", "An orphan trace must not be overwritten")
+                require(not (output / "sample_features.csv").exists(), "A new feature CSV must not be paired with an old orphan trace")
+        elif name == "orphan_feature_output":
+            input_path = case_dir / "sample.mzML"
+            write_fixture(input_path)
+            output = case_dir / "feature output"
+            run_program(executable, input_path, output, expect_success=True)
+            primary = output / "sample_features.csv"
+            trace = output / "sample_unresolved_groups.csv"
+            before = primary.read_bytes(), trace.read_bytes()
+            run_command(executable, ["-i", str(input_path), "-o", str(output), "--skip-existing"], case_dir, expect_success=True)
+            require(before == (primary.read_bytes(), trace.read_bytes()), "An existing output pair must be preserved")
+            trace.unlink()
+            process = run_command(executable, ["-i", str(input_path), "-o", str(output), "--skip-existing"], case_dir, expect_success=False)
+            require("unresolved-group trace pair" in process.stderr, "An orphan primary must fail visibly")
+            require(primary.read_bytes() == before[0] and not trace.exists(), "An orphan primary must not be overwritten or silently repaired")
+        elif name == "missing_output_value":
             input_path = case_dir / "valid.mzML"
             write_fixture(input_path)
             run_command(executable, ["-i", str(input_path), "-o", "-printfeatures"],

@@ -120,6 +120,9 @@ namespace qAlgorithms
         uint32_t length = 0;
         float lowerRT = 0;
         float upperRT = 0; // @todo set these during feature construction
+        std::vector<float> unresolvedMaximaRT = {};
+        uint8_t unresolvedReason = 0;
+        float unresolvedLowerRT = 0, unresolvedUpperRT = 0;
     };
 } // namespace qAlgorithms
 

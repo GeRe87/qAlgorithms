@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <set>
 #include <functional>
+#include <array>
 #if defined(_WIN32) && !defined(_USE_MATH_DEFINES)
     #define _USE_MATH_DEFINES // relevant for windows to have math constants
 #endif
@@ -46,12 +47,37 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const int16_t groupNum);
 
+    // For the compatibility predicate (disjoint windows OR separated apices
+    // OR two protected fits), these five extremes contain a witness whenever
+    // any option in the whole domain is compatible with a queried fit.
+    static std::array<size_t,5> compatibilityWitnesses(
+        const std::vector<std::pair<double,size_t>> &options,
+        const std::vector<RegressionGauss> &fits,
+        const std::vector<bool> &protectedFits)
+    {
+        assert(!options.empty());
+        const size_t first=options.front().second;
+        std::array<size_t,5> witnesses={first,first,first,first,SIZE_MAX};
+        for(const auto &option:options)
+        {
+            const size_t i=option.second;
+            if(fits[i].span.endIdx()<fits[witnesses[0]].span.endIdx())witnesses[0]=i;
+            if(fits[i].span.startIdx>fits[witnesses[1]].span.startIdx)witnesses[1]=i;
+            if(fits[i].position<fits[witnesses[2]].position)witnesses[2]=i;
+            if(fits[i].position>fits[witnesses[3]].position)witnesses[3]=i;
+            if(protectedFits[i])witnesses[4]=i;
+        }
+        return witnesses;
+    }
+
     static void resolveApexGroups(
         std::vector<RegressionGauss> *validRegressions,
         const float *intensities,
         const size_t length,
         const int16_t apexGroups[],
-        const std::vector<bool> &conflictingGroups);
+        const std::vector<bool> &conflictingGroups,
+        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr,
+        const size_t searchBudget = 200000);
 
     static int32_t regression_on_continuum(
         const float *intensities,
@@ -59,7 +85,8 @@ namespace qAlgorithms
         const float *intensities_log,
         const uint16_t *const df,
         const size_t length,
-        std::vector<RegressionGauss> *result);
+        std::vector<RegressionGauss> *result,
+        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr);
 
     /// @brief adjust the height of a regression to better fit the exponential data
     /// @param intensities non-logarithmic intensity values the regression was fitted to
@@ -138,7 +165,8 @@ namespace qAlgorithms
         const float *x_values,
         const uint16_t *DF_cum,
         const size_t length,
-        std::vector<RegressionGauss> *result)
+        std::vector<RegressionGauss> *result,
+        std::vector<UnresolvedPeak> *unresolvedGroups)
     {
         // control input for nullpointers, mismatching x and y, and fitting maxscale
         if (intensity_base == nullptr || x_values == nullptr || result == nullptr)
@@ -201,16 +229,26 @@ namespace qAlgorithms
                 assert(intensities_log[newLen - 1] > 1);
 
                 const size_t previousResults = result->size();
+                const size_t previousGroups = unresolvedGroups ? unresolvedGroups->size() : 0;
                 const int32_t status = regression_on_continuum(intensities,
                                         x_axis,
                                         intensities_log,
                                         df,
                                         newLen,
-                                        result);
+                                        result, unresolvedGroups);
                 if (status < 0)
                     return status;
                 for (size_t i = previousResults; i < result->size(); ++i)
                     result->at(i).span.startIdx += (int32_t)rangeStart;
+                if (unresolvedGroups)
+                    for (size_t i = previousGroups; i < unresolvedGroups->size(); ++i)
+                    {
+                        auto &group = unresolvedGroups->at(i);
+                        if (rangeStart > UINT32_MAX - group.end)
+                            throw std::runtime_error("Unresolved-group coordinates exceed the supported index range.");
+                        group.start += (uint32_t)rangeStart; group.end += (uint32_t)rangeStart;
+                        for (auto &index : group.maximaIndices) index += (uint32_t)rangeStart;
+                    }
             }
             rangeStart = pointIdx + 1;
         }
@@ -301,7 +339,8 @@ namespace qAlgorithms
         const float *intensities_log,
         const uint16_t *const df,
         const size_t length,
-        std::vector<RegressionGauss> *result)
+        std::vector<RegressionGauss> *result,
+        std::vector<UnresolvedPeak> *unresolvedGroups)
     {
 
         // coefficients for single-b0 peaks, spans all regressions over a peak window
@@ -373,9 +412,11 @@ namespace qAlgorithms
                 hasConflict = true;
             }
         }
+        std::vector<UnresolvedPeak> unresolvedCandidates;
         if (hasConflict)
             resolveApexGroups(&validRegressions, intensities, length,
-                             apexGroups.data(), conflictingGroups);
+                             apexGroups.data(), conflictingGroups,
+                             unresolvedGroups ? &unresolvedCandidates : nullptr);
 
         for (size_t peak = 0; peak < validRegressions.size(); peak++)
         {
@@ -383,7 +424,12 @@ namespace qAlgorithms
             if (reg->isValid)
             {
                 adjustRegression(reg, x_axis);
+                const size_t outputIndex = result->size();
                 result->push_back(*reg);
+                if (unresolvedGroups)
+                    for (auto group : unresolvedCandidates)
+                        if (group.resultIndex == peak)
+                        { group.resultIndex = outputIndex; unresolvedGroups->push_back(std::move(group)); }
             }
         }
         return 0;
@@ -403,8 +449,12 @@ namespace qAlgorithms
         const float *intensities,
         const size_t length,
         const int16_t apexGroups[],
-        const std::vector<bool> &conflictingGroups)
+        const std::vector<bool> &conflictingGroups,
+        std::vector<UnresolvedPeak> *unresolvedGroups,
+        const size_t searchBudget)
     {
+        struct SearchLimit final : std::runtime_error
+        { SearchLimit() : std::runtime_error("Joint apex selection exceeded its explicit search limit.") {} };
         struct ObservedMaximum
         {
             size_t first;
@@ -458,6 +508,7 @@ namespace qAlgorithms
                                  { return a.first == b.first; }), maxima.end());
         assert(!maxima.empty());
 
+        const auto originalMaxima = maxima;
         const double resolution = 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON;
         std::vector<bool> initiallySelected(count, false);
         for (size_t i = 0; i < count; ++i)
@@ -548,7 +599,7 @@ namespace qAlgorithms
                 else if (intensities[p] == intensities[valley.first])
                     valley.last = p;
             }
-            if (!(intensities[valley.first] < std::min(intensities[left.first], intensities[right.first])))
+            if (!(intensities[valley.first] < std::min(intensities[left.last], intensities[right.first])))
                 throw std::runtime_error("Supported neighbouring maxima have no separating observed valley.");
             valleys.push_back(valley);
         }
@@ -648,6 +699,7 @@ namespace qAlgorithms
             if (initiallySelected[i] && support[i] < 0)
                 selected.push_back(i);
         const size_t fixedCount = selected.size();
+        size_t coalescedGroups = 0;
         for (auto &options : choices)
             std::sort(options.begin(), options.end());
         // Disconnected apex ranges cannot constrain each other. Solve their
@@ -683,8 +735,8 @@ namespace qAlgorithms
             size_t visited = 0;
             std::vector<bool> assigned(members.size(), false);
             std::function<void(size_t, double)> search = [&](size_t depth, double cost) {
-                if (++visited > 200000)
-                    throw std::runtime_error("Joint apex selection exceeded its explicit search limit.");
+                if (++visited > searchBudget)
+                    throw SearchLimit();
                 if (depth == members.size())
                 {
                     if (cost < bestCost)
@@ -702,29 +754,62 @@ namespace qAlgorithms
                 // compatible option. Its cheapest surviving option supplies
                 // an admissible error bound. Branch on the smallest domain,
                 // so constrained groups are not postponed behind broad ones.
-                double optimisticCost = cost;
-                size_t next = members.size();
-                std::vector<std::pair<double, size_t>> nextOptions;
-                for (size_t k = 0; k < members.size(); ++k)
+                std::vector<std::vector<std::pair<double,size_t>>> domains(members.size());
+                std::vector<std::array<size_t,5>> witnesses(members.size());
+                for(size_t k=0;k<members.size();++k)
                 {
-                    if (assigned[k]) continue;
-                    std::vector<std::pair<double, size_t>> allowed;
-                    for (const auto &option : choices[members[k]])
+                    if(assigned[k])continue;
+                    for(const auto &option:choices[members[k]])
                     {
-                        bool feasible = true;
-                        for (size_t other : selected)
-                            if (!compatible(option.second, other))
-                            { feasible = false; break; }
-                        if (feasible) allowed.push_back(option);
+                        bool feasible=true;
+                        for(size_t other:selected)
+                            if(!compatible(option.second,other)){feasible=false;break;}
+                        if(feasible)domains[k].push_back(option);
                     }
-                    if (allowed.empty()) return;
-                    optimisticCost += allowed.front().first;
-                    if (next == members.size() || allowed.size() < nextOptions.size())
+                    if(domains[k].empty())return;
+                    witnesses[k]=compatibilityWitnesses(domains[k],*validRegressions,initiallySelected);
+                }
+                // Arc consistency removes alternatives lacking a compatible
+                // witness in any other remaining group. Extremal witnesses
+                // make this exact support check linear in domain size.
+                bool changed=true;
+                while(changed)
+                {
+                    changed=false;
+                    for(size_t k=0;k<members.size();++k)
                     {
-                        next = k;
-                        nextOptions = std::move(allowed);
+                        if(assigned[k])continue;
+                        auto &domain=domains[k];size_t retained=0;
+                        for(const auto &option:domain)
+                        {
+                            bool supported=true;
+                            for(size_t other=0;other<members.size();++other)
+                            {
+                                if(other==k || assigned[other])continue;
+                                bool found=false;
+                                for(size_t witness:witnesses[other])
+                                    if(witness!=SIZE_MAX && compatible(option.second,witness)){found=true;break;}
+                                if(!found){supported=false;break;}
+                            }
+                            if(supported)domain[retained++]=option;
+                        }
+                        if(retained==0)return;
+                        if(retained!=domain.size())
+                        {
+                            domain.resize(retained);changed=true;
+                            witnesses[k]=compatibilityWitnesses(domain,*validRegressions,initiallySelected);
+                        }
                     }
                 }
+                double optimisticCost=cost;
+                size_t next=members.size();
+                for(size_t k=0;k<members.size();++k)
+                    if(!assigned[k])
+                    {
+                        optimisticCost+=domains[k].front().first;
+                        if(next==members.size() || domains[k].size()<domains[next].size())next=k;
+                    }
+                const auto &nextOptions=domains[next];
                 if (optimisticCost >= bestCost) return;
                 assigned[next] = true;
                 for (const auto &option : nextOptions)
@@ -735,13 +820,116 @@ namespace qAlgorithms
                 }
                 assigned[next] = false;
             };
-            const size_t expected = selected.size() + members.size();
-            search(0, 0);
-            if (bestSelection.size() != expected)
-                throw std::runtime_error("No compatible accepted fits describe all supported maxima.");
+            const size_t componentStart = selected.size();
+            const size_t expected = componentStart + members.size();
+            bool limited = false;
+            bool geometricallyImpossible = false;
+            if (members.size() > 1)
+            {
+                int32_t commonStart = INT32_MIN, commonEnd = INT32_MAX;
+                double firstApex = INFINITY, lastApex = -INFINITY;
+                size_t protectedGroups = 0;
+                for (size_t k : members)
+                {
+                    firstApex = std::min(firstApex, low[k]); lastApex = std::max(lastApex, high[k]);
+                    bool protectedGroup = false;
+                    for (const auto &option : choices[k])
+                    {
+                        const auto &reg = validRegressions->at(option.second);
+                        commonStart = std::max(commonStart, reg.span.startIdx);
+                        commonEnd = std::min(commonEnd, reg.span.endIdx());
+                        protectedGroup = protectedGroup || initiallySelected[option.second];
+                    }
+                    protectedGroups += protectedGroup;
+                }
+                // A common window forces every chosen pair to overlap. With
+                // at most one protected group no stable/stable exemption exists.
+                geometricallyImpossible = protectedGroups <= 1 && commonStart <= commonEnd &&
+                    lastApex-firstApex <= double(members.size()-1)*resolution;
+            }
+            try { if (!geometricallyImpossible) search(0, 0); }
+            catch (const SearchLimit &)
+            {
+                selected.resize(componentStart);
+                if (!unresolvedGroups) throw;
+                limited = true;
+            }
+            if (limited || bestSelection.size() != expected)
+            {
+                if (!unresolvedGroups)
+                    throw std::runtime_error("No compatible accepted fits describe all supported maxima.");
+                size_t left = length, right = 0;
+                double minimumApex = INFINITY, maximumApex = -INFINITY;
+                std::vector<bool> eligible(count, false), eligibleApexGroups(conflictingGroups.size(), false);
+                for (size_t k : members)
+                {
+                    minimumApex = std::min(minimumApex, low[k]);
+                    maximumApex = std::max(maximumApex, high[k]);
+                    for (const auto &option : choices[k])
+                    {
+                        if (initiallySelected[option.second])
+                            throw std::runtime_error("An unresolved description would replace a protected stable fit.");
+                        eligible[option.second] = true;
+                        eligibleApexGroups[(size_t)apexGroups[option.second]] = true;
+                    }
+                }
+                UnresolvedPeak group;
+                group.reason = limited ? UnresolvedPeak::SearchLimit : UnresolvedPeak::Infeasible;
+                for (const auto &maximum : originalMaxima)
+                    for (size_t k : members)
+                        if (maximum.first >= maxima[k].first && maximum.first <= maxima[k].last)
+                        {
+                            group.maximaIndices.push_back((uint32_t)maximum.first);
+                            left = std::min(left, maximum.first); right = std::max(right, maximum.last);
+                            break;
+                        }
+                if (group.maximaIndices.size() < 2)
+                    throw std::runtime_error("No multi-maximum unresolved region can be represented.");
+                // Cover the complete observed/apex hypothesis envelope, not
+                // unrelated tails in the union of alternative fit windows.
+                left = std::min(left, (size_t)std::floor(minimumApex));
+                right = std::max(right, (size_t)std::ceil(maximumApex));
+                if (right >= length) throw std::runtime_error("Invalid unresolved-region bounds.");
+                group.start = (uint32_t)left; group.end = (uint32_t)right;
+                // Already validated broad bridge fits can represent a collective,
+                // while they remain ineligible as an extra resolved peak.
+                for (size_t i = 0; i < count; ++i)
+                    if (support[i] < 0 && !initiallySelected[i] &&
+                        conflictingGroups[(size_t)apexGroups[i]] && eligibleApexGroups[(size_t)apexGroups[i]])
+                        eligible[i] = true;
+                size_t representative = count;
+                double bestError = INFINITY;
+                for (size_t i = 0; i < count; ++i)
+                {
+                    if (!eligible[i]) continue;
+                    const auto &reg = validRegressions->at(i);
+                    if (reg.span.startIdx > (int32_t)left || reg.span.endIdx() < (int32_t)right ||
+                        reg.position < left || reg.position > right ||
+                        reg.position < minimumApex || reg.position > maximumApex)
+                        continue;
+                    bool allowed = true;
+                    for (size_t other : selected)
+                        if (!compatible(i, other)) { allowed = false; break; }
+                    if (!allowed) continue;
+                    double error = 0;
+                    for (size_t p = left; p <= right; ++p)
+                    {
+                        const double difference = intensities[p] - std::exp(regAt(&reg.coeffs, double(p)-reg.coeffs.x0));
+                        error += difference*difference;
+                    }
+                    if (error < bestError) { bestError = error; representative = i; }
+                }
+                if (representative == count)
+                    throw std::runtime_error("No accepted fit covers the complete unresolved region.");
+                group.resultIndex = representative;
+                unresolvedGroups->push_back(std::move(group));
+                selected.push_back(representative);
+                coalescedGroups += members.size()-1;
+                continue;
+            }
             selected = std::move(bestSelection);
         }
-        assert(selected.size() == fixedCount + choices.size());
+        assert(selected.size() == fixedCount + choices.size() - coalescedGroups);
         for (auto &reg : *validRegressions)
             reg.isValid = false;
         for (size_t i : selected)
@@ -1516,9 +1704,10 @@ namespace qAlgorithms
             const float *rt = bin->RT.data();
             size_t binLen = bin->df.size();
             int32_t status = 0;
+            std::vector<UnresolvedPeak> unresolvedGroups;
             try
             {
-                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks);
+                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks, &unresolvedGroups);
             }
             catch (const std::exception &error)
             {
@@ -1529,6 +1718,22 @@ namespace qAlgorithms
             for (size_t peak = 0; peak < peaks.size(); peak++)
             {
                 FeaturePeak feat = peakToFeat(&peaks[peak], bin, eic_ID);
+                for (const auto &group : unresolvedGroups)
+                    if (group.resultIndex == peak)
+                    {
+                        if (!feat.unresolvedMaximaRT.empty() || group.maximaIndices.size() < 2 ||
+                            group.start > group.end || group.end >= bin->RT.size())
+                            throw std::runtime_error("Invalid unresolved-group metadata.");
+                        feat.unresolvedReason = group.reason;
+                        feat.unresolvedLowerRT = bin->RT[group.start];
+                        feat.unresolvedUpperRT = bin->RT[group.end];
+                        for (uint32_t index : group.maximaIndices)
+                        {
+                            if (index < group.start || index > group.end)
+                                throw std::runtime_error("An unresolved maximum lies outside its reported region.");
+                            feat.unresolvedMaximaRT.push_back(bin->RT[index]);
+                        }
+                    }
                 res->push_back(feat);
             }
             peaks.clear();

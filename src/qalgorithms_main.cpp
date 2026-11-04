@@ -105,6 +105,10 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
 
         std::vector<FeaturePeak> features;
         findFeatures(&bins, &retentionTimes, &features);
+        size_t unresolvedCount = 0;
+        for (const auto &feature : features) unresolvedCount += !feature.unresolvedMaximaRT.empty();
+        if (unresolvedCount)
+            (void)fprintf(stderr, "Warning: %s contains %zu explicitly marked unresolved signal descriptions; these are not resolved individual features.\n", filename.c_str(), unresolvedCount);
         if (features.empty())
             (void)fprintf(stderr, "Warning: no features detected in %s; the feature CSV contains its header only.\n",
                           filename.c_str());

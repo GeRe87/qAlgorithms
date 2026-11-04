@@ -21,7 +21,7 @@ and `pt_03`, expected no peaks). The reflected three-peak grouping regression is
 the regular numerical regressions. The full test suite must therefore
 still be reported as failing. Test expectations have not been relaxed.
 
-Unresolved apex groups now produce an explicit processing error. With
+Unsupported unresolved apex groups still produce an explicit processing error. With
 `--skip-error`, subsequent files are still processed and the batch returns a
 nonzero status. These difficult profiles must be resolved before treating this
 branch as a general-purpose working release.
@@ -63,21 +63,104 @@ A synthetic selector regression captures three mandatory groups with 4, 6 and 7
 alternatives, spanning only 5.95 samples overall. Exhaustive enumeration of all
 168 triples proves none feasible under the unchanged separation rule. The
 selector must report explicit infeasibility instead of succeeding by dropping a
-mandatory group. This is a regression for honest error handling, not a fix that
-makes the real trace complete. The production selector is unchanged.
+mandatory group. This originally established honest strict-mode error handling. The optional
+collective output described below now handles this case without asserting
+three resolved peaks; strict API calls retain the original error.
 
 The corresponding measured trace, candidate coefficients, plots and exact
 constraint proof are supplied as local analysis artifacts, not committed as
 measurement data. Overlapping descriptions can be alternative accounts of one
-signal region; the current association with observed maxima does not itself
-establish the number of separate physical peaks. A future grouping change must
-specify how unresolved alternatives are represented and preserve established
-resolved-peak tests. No merging, peak omission, or baseline rule is inferred
-solely from this one trace.
+signal region; the association with observed maxima does not itself
+establish the number of separate physical peaks. The optional collective policy below preserves the established resolved-peak
+tests. It does not infer a physical peak count or a new baseline rule from
+this trace.
 
 The new regression passes in native Debug and Release. Full CTest remains 6/10
 with all four previously failing targets and original expectations retained.
-No area, RT, fit-coefficient or production output changes are included here.
+That test-only checkpoint did not alter production output. The subsequent
+collective implementation below extends the output contract explicitly.
+
+## Explicit collective descriptions (native Windows continuation)
+
+The user approved marked collective descriptions for statistically accepted
+regions that cannot be represented as separate compatible peaks. Feature
+construction opts into this policy; the default `qpeaks_find` API and all
+centroiding remain strict. Statistical thresholds, accepted coefficients,
+equidistant sample-index regression and RT/area transformation are unchanged.
+
+Joint selection first seeks the original complete assignment. A failed search
+can then return one **already statistically accepted** representative if it
+covers the entire observed-maximum/fitted-apex envelope, keeps its apex in that
+component's original apex range, and respects selected neighbours. Previously
+accepted broad bridge alternatives may also represent this envelope. The
+representative minimises raw-intensity SSE on that same envelope. This envelope
+is not the union of unrelated alternative fit-window tails. No new fit is
+created and no supported maximum in the replaced component is silently dropped:
+all its original maximum anchors (first point for a plateau) are recorded.
+Protected stable fits cannot be replaced. A missing full-envelope fit, an
+unsupported maximum, or a protected-fit conflict remains an explicit error.
+
+The main CSV appends five numeric columns to the original twenty:
+`isUnresolved`, `unresolvedReason`, `unresolvedMaximaCount`,
+`unresolvedLowerRT`, `unresolvedUpperRT`. Resolved rows contain zero in all five.
+For a collective, reason `1` means the joint assignment was proven infeasible;
+reason `2` means the bounded search stopped before proving feasibility or
+infeasibility. These are not evidence for a particular number of chemical peaks.
+The `*_unresolved_groups.csv` companion records `featureID,binID,maximumNumber,
+retentionTime,reason`, one row per associated observed maximum, in output ID
+order. It is created with a header even when no collective occurs. Successful
+collective output emits an explicit CLI warning. **Area, height, position and
+uncertainties in a collective row belong to its representative fit. They are
+not summed analyte quantities, deconvolved values or validated total areas.**
+
+Both output files are required. An unwritable companion returns a failure;
+files already written before that failure are not a successful output pair.
+`--skip-existing` preserves a complete pair and rejects an orphan main file or
+orphan companion. It checks regular-file presence, not the scientific validity
+or freshness of previously existing contents.
+
+Two selection details are verified separately. After close maxima merge, the
+valley comparison now uses the actual right boundary maximum of the left group,
+not its possibly weaker first maximum. The previous condition rejected a
+synthetic valid valley; reversing this one correction reproduces the failure.
+Joint search also removes alternatives that have no compatible witness in
+another remaining group. For the unchanged disjoint-window/apex-separation/
+protected-fit predicate, five extremal witnesses are sufficient; tests compare
+this reduction with exhaustive domain checks, including protected exceptions.
+A shared-window/apex-range bound proves certain components infeasible without
+exhausting the search budget. Neither optimisation changes the objective,
+resolution threshold, accepted fits or budget.
+
+Native GCC 15.1 Debug and Release both build. Full CTest remains **6/10**:
+`test_qpeaks`, `test_qpeaks_pt03`, `test_qpeaks_pt04`, and `test_utils` retain
+their original failures. The numerical regressions and all **15** generated
+CLI scenarios pass in both configurations. New checks cover strict infeasibility,
+marked collective output, an explicit search-limit reason, complete maximum
+metadata and coordinate offsets, a validated bridge fit, rejection when no
+full-cover candidate exists, protected neighbours, the merged-maximum valley,
+output-pair failures and preservation of an existing pair. The earlier Linux
+verification below is historical and is not the current native test result.
+
+On the real `230222_SFC_Modelling_MixF_01_20.mzML` (SHA256
+`b072c6bf1331bed1b1d6cb74ccaaad9bad9640a5e1d8b3f2988887a5d82a8da9`),
+isolated positive EIC 119 now succeeds with 63 descriptions: 49 ordinary and
+14 collective. Main and companion CSVs are byte-identical in Debug and Release.
+The isolated helper uses local bin ID 0 for original EIC 119 and assigns DQSC=1;
+its CSVs are diagnostic, not production whole-file exports. Its measured input
+contains 708 points; maximum anchors and bounds use their actual EIC RT values.
+The complete Debug and Release runs both import all 715 positive MS1 scans, produce 579351
+centroids and 7017 EICs, then fail explicitly at EIC 180 because no accepted
+fit covers its full unresolved envelope. Neither reaches negative-mode
+feature construction or produces a complete positive or negative
+feature list. Earlier successful centroid-only runs covered 715 scans per
+polarity; that does not establish feature-list completeness. No partial
+successful-EIC export is promoted to a complete measurement result.
+
+RT interpolation and area corrections remain deferred. Irregular RT intervals
+still prevent quantitative validation of areas and uncertainties. The next
+selection issue is representation of a conflict region that lacks a single
+accepted full-envelope model; the current implementation deliberately reports
+that limitation instead of assembling unvalidated summed quantities.
 
 ## Statistical-cascade audit continuation
 
