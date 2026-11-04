@@ -536,6 +536,43 @@ static void test_exact_log_fit_allows_zero_residual()
     assert(insignificantCoefficient(&reg.coeffs, 0, 1), "Zero curvature does not define a peak", NULL);
 }
 
+static void test_three_mandatory_groups_inside_two_resolution_intervals()
+{
+    // Synthetic analogue of an observed EIC conflict; no private measurement
+    // data is embedded here. Accepted alternatives are associated with three
+    // observed maxima, but all apex positions span only 5.95 samples.
+    const std::vector<float> y = {5,10,30,100,60,50,90,70,95,65,40,10,5};
+    const std::vector<std::vector<float>> positions = {
+        {2.60F,2.71F,3.58F,3.95F},
+        {5.15F,5.19F,5.84F,5.97F,6.72F,6.91F},
+        {7.53F,7.54F,7.82F,8.02F,8.06F,8.43F,8.55F}};
+    const double resolution = 3 + 2*FLT_EPSILON;
+    size_t feasible = 0;
+    for (float a : positions[0]) for (float b : positions[1]) for (float c : positions[2])
+        feasible += b-a > resolution && c-b > resolution;
+    assert(feasible == 0 && positions[2].back()-positions[0].front() < 2*resolution,
+           "Three mandatory overlapping descriptions cannot fit this apex range", NULL);
+    std::vector<RegressionGauss> candidates;
+    for (const auto &group : positions)
+        for (float position : group)
+        {
+            RegressionGauss reg;
+            reg.position = position; reg.span = {0,13};
+            reg.coeffs.x0 = 6; reg.coeffs.scale = 6;
+            reg.coeffs.b0 = std::log(100.0)-0.15*(position-6)*(position-6);
+            reg.coeffs.b1 = 0.3*(position-6);
+            reg.coeffs.b2 = reg.coeffs.b3 = -0.15;
+            candidates.push_back(reg);
+        }
+    std::vector<int16_t> groups(candidates.size(), 0);
+    const std::vector<bool> conflicting = {true};
+    bool rejected = false;
+    try { resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting); }
+    catch (const std::runtime_error &error)
+    { rejected = std::string(error.what()).find("No compatible accepted fits") != std::string::npos; }
+    assert(rejected, "Impossible mandatory groups must not succeed by silently omitting a maximum", NULL);
+}
+
 static void test_linear_null_model_residuals()
 {
     // These residuals are orthogonal to both columns of the linear model:
@@ -1268,6 +1305,7 @@ int main(int argc, const char *argv[])
     test_exact_log_fit_allows_zero_residual();
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
+    test_three_mandatory_groups_inside_two_resolution_intervals();
     test_analytic_peak_conflicts();
     test_conflict_preserves_stable_neighbor();
     test_flat_maximum_is_one_group();

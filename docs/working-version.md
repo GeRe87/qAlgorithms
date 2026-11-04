@@ -50,6 +50,35 @@ apices remain explicit errors. Statistical acceptance thresholds are unchanged.
 This is a bounded selection of peak descriptions, not quantitative deconvolution
 or proof that two reported features correspond to two chemical compounds.
 
+## Mandatory-group infeasibility regression
+
+A local investigation of the first unresolved real EIC distinguishes failure of
+the search from an infeasible grouping hypothesis. The search currently requires
+one accepted description for each associated observed local maximum. For three
+overlapping descriptions separated by more than the existing resolution limit,
+the overall fitted-apex range must exceed twice that limit. No search strategy
+or increased state budget can repair a hypothesis violating this condition.
+
+A synthetic selector regression captures three mandatory groups with 4, 6 and 7
+alternatives, spanning only 5.95 samples overall. Exhaustive enumeration of all
+168 triples proves none feasible under the unchanged separation rule. The
+selector must report explicit infeasibility instead of succeeding by dropping a
+mandatory group. This is a regression for honest error handling, not a fix that
+makes the real trace complete. The production selector is unchanged.
+
+The corresponding measured trace, candidate coefficients, plots and exact
+constraint proof are supplied as local analysis artifacts, not committed as
+measurement data. Overlapping descriptions can be alternative accounts of one
+signal region; the current association with observed maxima does not itself
+establish the number of separate physical peaks. A future grouping change must
+specify how unresolved alternatives are represented and preserve established
+resolved-peak tests. No merging, peak omission, or baseline rule is inferred
+solely from this one trace.
+
+The new regression passes in native Debug and Release. Full CTest remains 6/10
+with all four previously failing targets and original expectations retained.
+No area, RT, fit-coefficient or production output changes are included here.
+
 ## Statistical-cascade audit continuation
 
 Retain the equidistant sample-index regression, its precomputed matrices, and
