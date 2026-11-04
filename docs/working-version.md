@@ -10,15 +10,45 @@ MS1 profile mzML to per-file feature CSVs. It is an experimental engineering
 baseline. It is not a scientifically validated release.
 
 The complete synthetic workflow detects the two known signals at their expected
-m/z and retention time in positive, negative, and mixed-polarity files. The
-legacy qPeaks suite still exposes unresolved overlapping-apex cases (`pt_04`,
-expected three peaks, and `pt_03`, expected no peaks). The full test suite must
-therefore still be reported as failing. Test expectations have not been relaxed.
+m/z and retention time in positive, negative, and mixed-polarity files. A linear
+null-model correction and conservative selection among existing valid fits now
+also handle several synthetic overlapping-peak cases. Complete processing of
+representative real profile data is still blocked by ambiguous EIC peak
+selection. A diagnostic partial export is not a successful complete CLI run.
+
+The legacy qPeaks suite retains unresolved cases (`pt_04`, expected three peaks,
+and `pt_03`, expected no peaks). A separate reflected three-peak example also
+demonstrates an unresolved grouping error. The full test suite must therefore
+still be reported as failing. Test expectations have not been relaxed.
 
 Unresolved apex groups now produce an explicit processing error. With
 `--skip-error`, subsequent files are still processed and the batch returns a
 nonzero status. These difficult profiles must be resolved before treating this
 branch as a general-purpose working release.
+
+### Peak-selection changes and their limits
+
+The linear null-model residual now evaluates `intercept + slope * x`, matching
+the slope returned by the linear regression. The previous sign inflated the
+null-model residual for nonzero slopes. An exactly linear null model is valid,
+and cannot justify an additional peak model with an equal or larger residual.
+
+Only apex groups that the existing selector marks as conflicting enter the
+new refinement. It associates already validated fits with observed local
+maxima near their fitted apex, treats a flat maximum as one observation, and
+compares alternatives on a shared raw-intensity SSE interval. Observed valleys
+bound that comparison interval; they do not create a new fit. Fit coefficients,
+original windows, degrees of freedom and uncertainties are retained. Previously
+selected stable representatives are protected, and the same supported maximum
+is emitted only once.
+
+Nearby alternatives are combined only if their complete continuous fitted-apex
+range is within the existing resolution limit and their windows overlap. A
+final check uses the actual selected fitted apices and overlapping windows.
+Missing observed support, missing separating valleys, and incompatible selected
+apices remain explicit errors. Statistical acceptance thresholds are unchanged.
+This is a bounded selection of peak descriptions, not quantitative deconvolution
+or proof that two reported features correspond to two chemical compounds.
 
 ## Build
 
@@ -116,6 +146,11 @@ from its first polarity; a nonzero run must not be treated as complete.
   accession; shared referenceable parameter groups are supported.
 - Scan start times in seconds or minutes; selected scans must have strictly
   increasing retention times.
+- Peak regression still assumes locally even spacing in the supplied samples.
+  The current EIC construction does not resample irregular retention times or
+  insert missing scans. Consequently, irregular acquisition timing is an
+  unresolved limitation for peak shape, area and uncertainty estimates. Correct
+  CSV coordinates alone do not validate those quantitative properties.
 - Centroid-only input and MS2-only input are rejected. MS2 processing, MS-Numpress,
   cross-sample feature alignment, compound identification and deconvolution
   are outside this working baseline.
@@ -133,13 +168,34 @@ system zlib 1.3:
 | Configure and build | Pass | Pass |
 | Full CTest suite | 7 of 8 targets pass | 7 of 8 targets pass |
 | Generated mzML/CLI integration scenarios | 11 of 11 pass | 11 of 11 pass |
-| New qPeaks coordinate, indexing and weighting regressions | Pass | Pass |
+| qPeaks coordinate, indexing, weighting, linear-null and selection regressions | Pass | Pass |
 
 The integration scenarios are grouped in the single `test_mzml_cli` CTest
 target. The sole failing target is the retained legacy `test_qpeaks` suite,
 which encounters the unresolved apex-conflict error described above. It has
 not been disabled or marked as an expected success. The full CTest command
 therefore returns a failure status in both configurations.
+
+The added tests include exact linear trends and orthogonal residuals, analytic
+single and paired Gaussian signals, broad peaks, close unequal peaks and their
+reflections, monotone traces, plateaus, and preservation of a stable neighbour.
+Expected peak counts and positions were fixed before evaluating the changes.
+Passing count/position checks does not establish quantitative accuracy: one
+weaker peak in a close synthetic pair still has about 13.1% area error.
+
+An additional known failure is directly reproducible:
+
+```sh
+./build/tests_bin/test_qpeaks --known-reflection-failure
+```
+
+This intentionally failing diagnostic uses the complete processing path on a
+reflected analytic three-peak signal. The middle apex should be near 104.8 but
+is reported near 106.6778. The original pre-grouping classifies those groups as
+stable, so conflict refinement is never reached. Direct reflection checks of
+the new resolver pass; full-pipeline reflection invariance does not. This
+diagnostic is separate from the eight registered CTest targets and has not
+been marked as an expected success.
 
 The Python integration test generates all its own inputs using a fixed random
 seed and standard-library XML, binary encoding and compression. It requires
@@ -158,11 +214,37 @@ retained. Without it, successful temporary runs are cleaned up. This is an
 engineering test of the processing chain, not a validation of analytical
 accuracy, detection limits, false-positive rates or uncertainty estimates.
 
+### Real measurements without a reference feature list
+
+Such files are useful for checking complete import, processing, finite outputs,
+repeatability, and agreement of reported peak locations with the original
+profile signals. Record the input hash, exact source revision, command, exit
+status and logs alongside each result. Select any manually inspected peaks by
+a stated rule, rather than choosing only visually convincing examples.
+
+Without known reference signals, these checks do not establish how many true
+features were missed, how many detections are false, compound identities, or
+quantitative accuracy. A raw extracted ion trace used for visual comparison
+also has different intensity/area semantics from the fitted qAlgorithms
+feature area; its extraction window must be reported explicitly.
+
+The strict CLI continues to return an error for an unresolved EIC. A private
+diagnostic may isolate each EIC, retain features only after the whole EIC
+succeeds, and record every rejected EIC with its original ID, polarity, RT
+bounds and error. Such files must be labelled `PARTIAL`. Successful-EIC
+fractions are not feature recall, because excluded EICs may contain an unknown
+number of peaks. The partial diagnostic is not a catch-and-continue production
+mode and does not change the CLI's failure status.
+
 ## Next acceptance work
 
-1. Resolve the legacy `pt_03` and `pt_04` apex-conflict cases without weakening
-   their expected behavior or silently discarding ambiguous regions.
-2. Validate the branch natively on Windows with the UCRT64 recipe.
-3. Run a representative real profile mzML and compare the generated feature
-   list against known signals and an agreed reference analysis.
-4. Measure processing time and memory on realistic files before broader use.
+1. Resolve ambiguous real-data EIC selection, the legacy `pt_03` / `pt_04`
+   cases, and the full-pipeline reflection failure without weakening expected
+   behavior or silently discarding ambiguous regions.
+2. Account for irregular retention-time spacing before validating areas,
+   shapes and uncertainties quantitatively.
+3. Achieve a complete strict CLI run on representative profile mzML data;
+   then compare feature locations and quantities with known signals or an
+   agreed independent reference analysis.
+4. Validate the branch natively on Windows with the UCRT64 recipe, and measure
+   time and memory on successful realistic-file runs before broader use.

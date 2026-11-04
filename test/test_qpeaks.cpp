@@ -1,5 +1,7 @@
 #include "qalgorithms_datatypes.h"
 #include "qalgorithms_qpeaks.h"
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -299,6 +301,342 @@ static void test_apex_grouping_more_than_128_candidates()
     assert(count == 1, "Coincident candidates must form exactly one apex group\n", NULL);
     for (size_t i = 0; i < groups.size(); ++i)
         assert(groups[i] == 0, "Candidate %zu was not assigned to the common group\n", i);
+}
+
+static void test_linear_null_model_residuals()
+{
+    // These residuals are orthogonal to both columns of the linear model:
+    // sum(e_i) = sum(i*e_i) = 0; sum(e_i^2) = 14/16 = 0.875.
+    const float residuals[] = {0.25F, -0.5F, 0.5F, -0.5F, 0.25F};
+    for (const float slope : {2.0F, -2.0F})
+    {
+        std::vector<float> exact(5);
+        std::vector<float> perturbed(5);
+        for (size_t i = 0; i < exact.size(); ++i)
+        {
+            exact[i] = 20.0F + slope * (float)i;
+            perturbed[i] = exact[i] + residuals[i];
+        }
+        const double residual_sum = calcRSS_H0_cf2(perturbed.data(), {0, 5});
+        assert(std::abs(residual_sum - 0.875) < 1e-12,
+               "Linear null-model RSS for slope %f must be 0.875, found %f\n",
+               slope, residual_sum);
+        const double exact_sum = calcRSS_H0_cf2(exact.data(), {0, 5});
+        assert(std::abs(exact_sum) < 1e-12,
+               "An exact line with slope %f must have zero residual sum, found %f\n",
+               slope, exact_sum);
+    }
+}
+
+struct SyntheticGaussian
+{
+    double apex_index;
+    double height;
+    double sigma;
+};
+
+static std::vector<float> synthetic_gaussians(size_t length,
+                                              const std::vector<SyntheticGaussian> &components)
+{
+    std::vector<float> y(length);
+    for (size_t i = 0; i < length; ++i)
+    {
+        double intensity = 0;
+        for (const auto &component : components)
+        {
+            const double z = ((double)i - component.apex_index) / component.sigma;
+            intensity += component.height * std::exp(-0.5 * z * z);
+        }
+        y[i] = (float)intensity;
+    }
+    return y;
+}
+
+static std::vector<RegressionGauss> check_synthetic_peak_selection(
+    const char *name, const std::vector<float> &y, const std::vector<SyntheticGaussian> &expected)
+{
+    // All cases below have analytically distinct modes. Their count and the
+    // half-sample position tolerance were fixed before running the algorithm.
+    const double x_start = 100;
+    const double x_step = 0.2;
+    std::vector<float> x(y.size());
+    for (size_t i = 0; i < x.size(); ++i)
+        x[i] = 100.0F + 0.2F * (float)i;
+
+    std::vector<RegressionGauss> peaks;
+    int32_t count = -1;
+    try
+    {
+        count = qpeaks_find(y.data(), x.data(), nullptr, y.size(), &peaks);
+    }
+    catch (const std::exception &error)
+    {
+        (void)fprintf(stderr, "Synthetic case %s threw: %s\n", name, error.what());
+        assert(false, "Synthetic peak selection must not reject the known profile: %s\n", name);
+    }
+    assert(count == (int32_t)expected.size() && peaks.size() == expected.size(),
+           "%s: expected %zu peaks, found %d\n", name, expected.size(), count);
+    std::sort(peaks.begin(), peaks.end(), [](const RegressionGauss &left, const RegressionGauss &right)
+              { return left.position < right.position; });
+    for (size_t i = 0; i < peaks.size(); ++i)
+    {
+        const RegressionGauss &peak = peaks[i];
+        const double apex = x_start + x_step * expected[i].apex_index;
+        assert(std::isfinite(peak.position) && std::abs(peak.position - apex) <= 0.5 * x_step,
+               "%s: expected an apex near %f, found %f\n", name, apex, peak.position);
+        assert(std::isfinite(peak.height) && peak.height > 0 &&
+                   std::isfinite(peak.area) && peak.area > 0,
+               "%s: returned peak properties must be finite and positive\n", name);
+
+        // Diagnostics only: finding two maxima does not establish unbiased
+        // quantitative deconvolution of their overlapping component areas.
+        const double area = expected[i].height * expected[i].sigma * x_step * std::sqrt(2 * std::acos(-1.0));
+        printf("Synthetic %s peak %zu: height expected %.8f, found %.8f, relative error %.6f%%; "
+               "area expected %.8f, found %.8f, relative error %.6f%%\n",
+               name, i, expected[i].height, peak.height,
+               100 * (peak.height / expected[i].height - 1),
+               area, peak.area, 100 * (peak.area / area - 1));
+        (void)fflush(stdout);
+    }
+    return peaks;
+}
+
+static void test_analytic_peak_conflicts()
+{
+    // The valleys between these Gaussian pairs stay above e. Both signals
+    // therefore enter one continuum, unlike separately thresholded peaks.
+    for (const int separation : {8, 6})
+    {
+        const std::vector<SyntheticGaussian> components = {
+            {12, 1000, 1.2}, {12.0 + separation, 700, 1.2}};
+        std::vector<float> y = synthetic_gaussians((size_t)(25 + separation), components);
+        const char *name = separation == 8 ? "two_gaussians_separation_8" : "two_gaussians_separation_6";
+        check_synthetic_peak_selection(name, y, components);
+        if (separation == 6)
+        {
+            std::reverse(y.begin(), y.end());
+            check_synthetic_peak_selection("two_gaussians_separation_6_mirrored", y,
+                                           {{12, 700, 1.2}, {18, 1000, 1.2}});
+        }
+    }
+    const std::vector<SyntheticGaussian> unequal = {{12.25, 400, 1.2}, {17.75, 1000, 1.2}};
+    std::vector<float> close_pair = synthetic_gaussians(31, unequal);
+    check_synthetic_peak_selection("two_close_unequal_gaussians", close_pair, unequal);
+    std::reverse(close_pair.begin(), close_pair.end());
+    check_synthetic_peak_selection("two_close_unequal_gaussians_mirrored", close_pair,
+                                   {{12.25, 1000, 1.2}, {17.75, 400, 1.2}});
+
+    // This broad, plainly bimodal profile reproduced the unresolved-group
+    // exception in 1b992a5. It is generated analytically, not from a user file.
+    const std::vector<SyntheticGaussian> broad_pair = {{14, 1000, 3}, {26, 700, 3}};
+    check_synthetic_peak_selection("two_broad_gaussians", synthetic_gaussians(41, broad_pair), broad_pair);
+
+    // Resolving an ambiguous group must not split one broad maximum into
+    // several peaks or invent peaks on a strictly monotone positive trace.
+    const std::vector<SyntheticGaussian> single = {{30.25, 1000, 6}};
+    check_synthetic_peak_selection("broad_single_gaussian", synthetic_gaussians(61, single), single);
+    std::vector<float> monotone(31);
+    for (size_t i = 0; i < monotone.size(); ++i)
+        monotone[i] = (float)(20.0 * std::exp(0.05 * (double)i));
+    check_synthetic_peak_selection("monotone_increasing", monotone, {});
+    std::reverse(monotone.begin(), monotone.end());
+    check_synthetic_peak_selection("monotone_decreasing", monotone, {});
+}
+
+static bool same_peak_description(const RegressionGauss &a, const RegressionGauss &b)
+{
+    return a.coeffs.b0 == b.coeffs.b0 && a.coeffs.b1 == b.coeffs.b1 &&
+           a.coeffs.b2 == b.coeffs.b2 && a.coeffs.b3 == b.coeffs.b3 &&
+           a.coeffs.scale == b.coeffs.scale && a.coeffs.x0 == b.coeffs.x0 &&
+           a.span.startIdx == b.span.startIdx && a.span.length == b.span.length &&
+           a.position == b.position && a.height == b.height && a.area == b.area &&
+           a.position_unc == b.position_unc && a.height_unc == b.height_unc &&
+           a.area_unc == b.area_unc && a.fwhm == b.fwhm && a.jaccard == b.jaccard &&
+           a.dqs == b.dqs && a.df == b.df && a.numCompetitors == b.numCompetitors &&
+           a.apexGroup == b.apexGroup && a.isValid == b.isValid;
+}
+
+static void test_conflict_preserves_stable_neighbor()
+{
+    // Fixed before testing: the broad pair is joined by one >e continuum to a
+    // smaller, independent peak. The selected fit of that stable group must
+    // survive a repair elsewhere in the continuum without refitting.
+    const std::vector<SyntheticGaussian> components = {{14, 1000, 3}, {26, 700, 3}, {40, 100, 2}};
+    const std::vector<float> y = synthetic_gaussians(51, components);
+    std::vector<float> x(y.size());
+    for (size_t i = 0; i < x.size(); ++i)
+        x[i] = 100.0F + 0.2F * (float)i;
+    size_t start = 0;
+    size_t end = y.size();
+    while (start < end && y[start] <= minIntensity_global)
+        ++start;
+    while (end > start && y[end - 1] <= minIntensity_global)
+        --end;
+    const size_t length = end - start;
+    std::vector<float> log_y(length);
+    for (size_t i = 0; i < length; ++i)
+    {
+        assert(y[start + i] > minIntensity_global,
+               "The three analytical peaks must share one continuum\n", NULL);
+        log_y[i] = std::log(y[start + i]);
+    }
+    std::vector<RegCoeffs> coefficients;
+    findCoefficients(log_y.data(), length, &coefficients);
+    std::vector<RegressionGauss> candidates;
+    validateRegressions(y.data() + start, log_y.data(), x.data() + start, nullptr,
+                        &coefficients, length, &candidates);
+    std::vector<int16_t> groups(candidates.size(), -1);
+    const size_t group_count = groupRegsByApex(&candidates, groups.data());
+    std::vector<bool> conflicting(group_count, false);
+    size_t stable_neighbor = candidates.size();
+    bool has_conflict = false;
+    for (size_t group = 0; group < group_count; ++group)
+    {
+        if (groupApexIsStable(&candidates, groups.data(), (int16_t)group) != -1)
+        {
+            conflicting[group] = true;
+            has_conflict = true;
+            continue;
+        }
+        const size_t chosen = selectFromGroup(&candidates, y.data() + start, groups.data(), (int16_t)group);
+        candidates[chosen].isValid = true;
+        if (std::abs(candidates[chosen].position + (double)start - 40.0) <= 0.5)
+            stable_neighbor = chosen;
+    }
+    assert(has_conflict && stable_neighbor < candidates.size(),
+           "This fixture must contain both a conflict and a stable smaller neighbor\n", NULL);
+
+    RegressionGauss reference = candidates[stable_neighbor];
+    adjustRegression(&reference, x.data() + start);
+    reference.span.startIdx += (int32_t)start;
+    const auto peaks = check_synthetic_peak_selection("conflict_with_stable_neighbor", y, components);
+    assert(same_peak_description(peaks.back(), reference),
+           "Conflict resolution changed the previously selected stable neighbor\n", NULL);
+
+    // Reflect the same candidates and fixed group membership to isolate the
+    // repair's symmetry. Regrouping the reflected raw profile is a separate
+    // operation: the pre-existing grouping heuristic is not reflection-invariant.
+    std::vector<float> reflected_y(y.begin() + start, y.begin() + end);
+    std::reverse(reflected_y.begin(), reflected_y.end());
+    for (RegressionGauss &candidate : candidates)
+    {
+        candidate.position = (float)(length - 1) - candidate.position;
+        candidate.span.startIdx = (int32_t)length - candidate.span.startIdx - candidate.span.length;
+        candidate.coeffs.x0 = (uint16_t)(length - 1 - candidate.coeffs.x0);
+        candidate.coeffs.b1 = -candidate.coeffs.b1;
+        std::swap(candidate.coeffs.b2, candidate.coeffs.b3);
+    }
+    reference = candidates[stable_neighbor];
+    resolveApexGroups(&candidates, reflected_y.data(), length, groups.data(), conflicting);
+    assert(same_peak_description(candidates[stable_neighbor], reference),
+           "Reflected conflict resolution changed the stable neighbor\n", NULL);
+    std::vector<float> selected_positions;
+    const double reflected_start = (double)(y.size() - end);
+    for (const RegressionGauss &candidate : candidates)
+        if (candidate.isValid)
+            selected_positions.push_back(candidate.position + (float)reflected_start);
+    std::sort(selected_positions.begin(), selected_positions.end());
+    assert(selected_positions.size() == 3,
+           "Reflected conflict resolution must select three maxima without duplicates\n", NULL);
+    const double reflected_centers[] = {10, 24, 36};
+    for (size_t i = 0; i < selected_positions.size(); ++i)
+        assert(std::abs(selected_positions[i] - reflected_centers[i]) <= 0.5,
+               "Reflected conflict resolution misplaced peak %zu: %f\n", i, selected_positions[i]);
+}
+
+static void test_flat_maximum_is_one_group()
+{
+    // [4,8] is one connected maximum plateau. Candidate apexes on its two
+    // ends must not be interpreted as two observed maxima or need a valley.
+    const float y[] = {5, 10, 25, 70, 100, 100, 100, 100, 100, 70, 25, 10, 5};
+    std::vector<RegressionGauss> candidates(2);
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        const uint16_t apex = i == 0 ? 4 : 8;
+        candidates[i].position = (float)apex;
+        candidates[i].span = {2, 9};
+        candidates[i].coeffs = {std::log(100.0), 0, -0.125, -0.125, 4, apex};
+    }
+    const auto originals = candidates;
+    const int16_t groups[] = {0, 0};
+    resolveApexGroups(&candidates, y, sizeof(y) / sizeof(y[0]), groups, {true});
+    size_t selected = 0;
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (!candidates[i].isValid)
+            continue;
+        ++selected;
+        RegressionGauss reference = originals[i];
+        reference.isValid = true;
+        assert(same_peak_description(candidates[i], reference),
+               "Plateau grouping must select an unchanged candidate\n", NULL);
+    }
+    assert(selected == 1, "The two plateau ends must yield one selected maximum, found %zu\n", selected);
+}
+
+static void test_close_maxima_share_one_selected_fit()
+{
+    // Both distances are within the existing minimum resolution. The selector
+    // must retain one existing description of the close pair, not claim two
+    // resolved peaks, while preserving the independent stable neighbor.
+    for (const int separation : {2, 3})
+    {
+        std::vector<float> y = {5, 10, 25, 60, 90, 100, 50, 80, 70, 50, 20,
+                                10, 8, 20, 35, 40, 35, 20, 8, 5, 4};
+        if (separation == 3)
+            y.insert(y.begin() + 6, 50);
+        const uint16_t apexes[] = {5, (uint16_t)(5 + separation), (uint16_t)(13 + separation)};
+        const float heights[] = {100, 80, 40};
+        std::vector<RegressionGauss> candidates(3);
+        for (size_t i = 0; i < candidates.size(); ++i)
+        {
+            const uint16_t scale = i == 2 ? 3 : 4;
+            RegressionGauss &candidate = candidates[i];
+            candidate.position = (float)apexes[i];
+            candidate.span = {(int32_t)apexes[i] - scale, 2 * scale + 1};
+            candidate.coeffs = {std::log((double)heights[i]), 0, -0.125, -0.125, scale, apexes[i]};
+            candidate.height = heights[i];
+            candidate.area = (float)(heights[i] * 2 * std::sqrt(2 * std::acos(-1.0)));
+            candidate.position_unc = 0.1F;
+            candidate.height_unc = 1;
+            candidate.area_unc = 2;
+            candidate.df = (uint16_t)(candidate.span.length - 4);
+            candidate.isValid = i == 2;
+        }
+        const auto originals = candidates;
+        const int16_t groups[] = {0, 0, 1};
+        resolveApexGroups(&candidates, y.data(), y.size(), groups, {true, false});
+        assert(candidates.size() == originals.size(),
+               "Selecting unresolved maxima must not create a new fitted candidate\n", NULL);
+        assert(same_peak_description(candidates[2], originals[2]),
+               "A nearby unresolved pair changed the independent stable neighbor\n", NULL);
+        size_t selected_close = 0;
+        for (size_t i = 0; i < 2; ++i)
+        {
+            if (!candidates[i].isValid)
+                continue;
+            ++selected_close;
+            RegressionGauss reference = originals[i];
+            reference.isValid = true;
+            assert(same_peak_description(candidates[i], reference),
+                   "The chosen unresolved-peak description must retain its original fit\n", NULL);
+        }
+        assert(selected_close == 1,
+               "Maxima %d samples apart must select one unchanged fit, found %zu\n",
+               separation, selected_close);
+    }
+}
+
+static void test_known_reflected_three_peak_grouping()
+{
+    // Known full-pipeline failure, run explicitly with --known-reflection-failure.
+    // The original grouping heuristic calls a broad bridge fit stable after
+    // reflection, so the conflict resolver is not entered. Keep the correct
+    // three-peak count AND half-sample location expectations unchanged.
+    std::vector<float> y = synthetic_gaussians(51, {{14, 1000, 3}, {26, 700, 3}, {40, 100, 2}});
+    std::reverse(y.begin(), y.end());
+    check_synthetic_peak_selection("known_reflected_three_peak_grouping", y,
+                                   {{10, 100, 2}, {24, 700, 3}, {36, 1000, 3}});
 }
 
 static void test_features_follow_eic_retention_times()
@@ -673,12 +1011,23 @@ int main(int argc, const char *argv[])
     // initialise seed for noise generating funtions
     srand(1234); // NOLINT
 
+    if (argc == 2 && std::strcmp(argv[1], "--known-reflection-failure") == 0)
+    {
+        test_known_reflected_three_peak_grouping();
+        return 0;
+    }
+
     test_apex_conversion_nonunit_spacing();
     test_weighted_mean_ignores_interpolated_values();
     test_peak_at_region_boundaries_and_cumulative_df();
     test_apex_grouping_more_than_128_candidates();
     test_features_follow_eic_retention_times();
     test_centroid_id_above_uint16();
+    test_linear_null_model_residuals();
+    test_analytic_peak_conflicts();
+    test_conflict_preserves_stable_neighbor();
+    test_flat_maximum_is_one_group();
+    test_close_maxima_share_one_selected_fit();
     if (argc == 2 && std::strcmp(argv[1], "--regressions-only") == 0)
         return 0;
 

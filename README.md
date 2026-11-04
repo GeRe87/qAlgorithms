@@ -1,7 +1,9 @@
 > **Working branch:** For the reproducible mzML-to-feature-CSV workflow,
 > build instructions, verification results and current limitations, see
 > [the working-version guide](docs/working-version.md).
-> The legacy overlapping-apex tests remain unresolved; this is experimental.
+> Linear-null-model and conservative apex-selection fixes are covered by
+> synthetic tests. Ambiguous real-data EICs and known legacy/grouping failures
+> remain unresolved; complete processing is not yet reliable. This is experimental.
 
 ## Usage Notice
 At this moment, `qAlgorithms` is provided purely for reasons of scientific transparency. There are

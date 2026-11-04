@@ -74,6 +74,11 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
 
         std::vector<CentroidPeak> centroids;
         findCentroids(&inputFile, &selectedIndices, &centroids);
+        if (!args.silent)
+        {
+            printf("    Centroiding complete: %zu centroids\n", centroids.size());
+            (void)fflush(stdout);
+        }
         if (args.printCentroids)
             printCentroids(&centroids, &retentionTimes, args.outputPath, filename, args.silent, args.noOverwrite);
         if (args.term == TerminateAfter::centroids)
@@ -85,6 +90,11 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         std::vector<EIC> bins;
         if (centroids.size() >= 5)
             bins = performQbinning(&centroids, &retentionTimes);
+        if (!args.silent)
+        {
+            printf("    Binning complete: %zu extracted ion chromatograms\n", bins.size());
+            (void)fflush(stdout);
+        }
         if (args.printBins)
             printBins(&centroids, &bins, args.outputPath, filename, args.silent, args.noOverwrite);
         if (args.term == TerminateAfter::binning)

@@ -44,6 +44,13 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const int16_t groupNum);
 
+    static void resolveApexGroups(
+        std::vector<RegressionGauss> *validRegressions,
+        const float *intensities,
+        const size_t length,
+        const int16_t apexGroups[],
+        const std::vector<bool> &conflictingGroups);
+
     static int32_t regression_on_continuum(
         const float *intensities,
         const float *x_axis,
@@ -340,6 +347,8 @@ namespace qAlgorithms
         size_t apexcount = groupRegsByApex(&validRegressions, apexGroups.data());
         assert(apexcount < INT16_MAX);
 
+        std::vector<bool> conflictingGroups(apexcount, false);
+        bool hasConflict = false;
         for (int16_t groupNum = 0; groupNum < (int16_t)apexcount; groupNum++)
         {
             int32_t stableApex = groupApexIsStable(&validRegressions, apexGroups.data(), groupNum);
@@ -351,9 +360,13 @@ namespace qAlgorithms
             }
             else
             {
-                throw std::runtime_error("Unresolved overlapping apex groups: peak deconvolution is not implemented for this profile.");
+                conflictingGroups[(size_t)groupNum] = true;
+                hasConflict = true;
             }
         }
+        if (hasConflict)
+            resolveApexGroups(&validRegressions, intensities, length,
+                             apexGroups.data(), conflictingGroups);
 
         for (size_t peak = 0; peak < validRegressions.size(); peak++)
         {
@@ -365,6 +378,254 @@ namespace qAlgorithms
             }
         }
         return 0;
+    }
+
+    // Refine only conflicting groups. A broad fit whose apex lies in the valley
+    // between two peaks can join their candidates transitively, even though the
+    // measured maxima and smaller valid fits distinguish the peaks. Such a fit
+    // must not become a third peak or suppress a supported neighbouring maximum.
+    //
+    // Coefficients, fit spans, degrees of freedom and uncertainties are retained.
+    // Valleys bound only the common SSE comparison interval; they do not define
+    // a new regression window. This selects peak descriptions, not quantitative
+    // deconvolution of the overlapping signals.
+    static void resolveApexGroups(
+        std::vector<RegressionGauss> *validRegressions,
+        const float *intensities,
+        const size_t length,
+        const int16_t apexGroups[],
+        const std::vector<bool> &conflictingGroups)
+    {
+        struct ObservedMaximum
+        {
+            size_t first;
+            size_t last;
+        };
+        const size_t count = validRegressions->size();
+        std::vector<int32_t> support(count, -1);
+        std::vector<ObservedMaximum> maxima;
+        std::vector<bool> supportedGroups(conflictingGroups.size(), false);
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            const RegressionGauss &reg = validRegressions->at(i);
+            const size_t group = (size_t)apexGroups[i];
+            // Already selected stable representatives remain eligible unchanged.
+            // Other candidates from a stable group are outside this refinement.
+            if (!conflictingGroups[group] && !reg.isValid)
+                continue;
+
+            const size_t left = (size_t)std::floor(reg.position);
+            const size_t right = (size_t)std::ceil(reg.position);
+            for (size_t p = left; p <= right && p < length; ++p)
+            {
+                size_t first = p;
+                size_t last = p;
+                while (first > 0 && intensities[first - 1] == intensities[p])
+                    --first;
+                while (last + 1 < length && intensities[last + 1] == intensities[p])
+                    ++last;
+                // Treat a flat maximum as one observed apex. Both outside
+                // neighbours must be lower, so a flat baseline is not a peak.
+                if (first == 0 || last + 1 >= length ||
+                    intensities[first - 1] >= intensities[p] ||
+                    intensities[last + 1] >= intensities[p])
+                    continue;
+                support[i] = (int32_t)first;
+                maxima.push_back({first, last});
+                supportedGroups[group] = true;
+                break;
+            }
+        }
+        for (size_t group = 0; group < conflictingGroups.size(); ++group)
+        {
+            if (conflictingGroups[group] && !supportedGroups[group])
+                throw std::runtime_error("An overlapping apex group has no observed maximum supported by a valid fit.");
+        }
+
+        std::sort(maxima.begin(), maxima.end(), [](const ObservedMaximum &a, const ObservedMaximum &b)
+                  { return a.first < b.first; });
+        maxima.erase(std::unique(maxima.begin(), maxima.end(), [](const ObservedMaximum &a, const ObservedMaximum &b)
+                                 { return a.first == b.first; }), maxima.end());
+        assert(!maxima.empty());
+
+        const double resolution = 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON;
+        std::vector<bool> initiallySelected(count, false);
+        for (size_t i = 0; i < count; ++i)
+            initiallySelected[i] = validRegressions->at(i).isValid;
+
+        // Nearby measured maxima need not represent separable fitted peaks.
+        // Combine their alternatives only when the entire continuous apex
+        // range remains inside the existing resolution limit and the fit
+        // spans overlap. Testing the full range prevents transitive chains
+        // from swallowing alternatives farther apart than that limit.
+        while (maxima.size() > 1)
+        {
+            size_t mergeAt = maxima.size();
+            double smallestRange = INFINITY;
+            bool ambiguous = false;
+            for (size_t k = 0; k + 1 < maxima.size(); ++k)
+            {
+                double lowerApex = INFINITY;
+                double upperApex = -INFINITY;
+                bool stableLeft = false;
+                bool stableRight = false;
+                int32_t leftStart = INT32_MAX;
+                int32_t leftEnd = 0;
+                int32_t rightStart = INT32_MAX;
+                int32_t rightEnd = 0;
+                for (size_t i = 0; i < count; ++i)
+                {
+                    const bool left = support[i] == (int32_t)maxima[k].first;
+                    const bool right = support[i] == (int32_t)maxima[k + 1].first;
+                    if (!left && !right)
+                        continue;
+                    const RegressionGauss &reg = validRegressions->at(i);
+                    lowerApex = std::min(lowerApex, (double)reg.position);
+                    upperApex = std::max(upperApex, (double)reg.position);
+                    if (left)
+                    {
+                        stableLeft = stableLeft || reg.isValid;
+                        leftStart = std::min(leftStart, reg.span.startIdx);
+                        leftEnd = std::max(leftEnd, reg.span.endIdx());
+                    }
+                    if (right)
+                    {
+                        stableRight = stableRight || reg.isValid;
+                        rightStart = std::min(rightStart, reg.span.startIdx);
+                        rightEnd = std::max(rightEnd, reg.span.endIdx());
+                    }
+                }
+                if ((stableLeft && stableRight) || leftEnd < rightStart || rightEnd < leftStart)
+                    continue;
+                const double apexRange = upperApex - lowerApex;
+                if (apexRange > resolution)
+                    continue;
+                if (apexRange < smallestRange)
+                {
+                    smallestRange = apexRange;
+                    mergeAt = k;
+                    ambiguous = false;
+                }
+                else if (apexRange == smallestRange && k == mergeAt + 1)
+                    ambiguous = true;
+            }
+            // Equally close alternatives sharing a group must not be resolved
+            // just by their processing order. The final check retains an
+            // explicit error if their selected descriptions remain too close.
+            if (mergeAt == maxima.size() || ambiguous)
+                break;
+            const int32_t previousKey = (int32_t)maxima[mergeAt + 1].first;
+            const int32_t combinedKey = (int32_t)maxima[mergeAt].first;
+            for (int32_t &key : support)
+                if (key == previousKey)
+                    key = combinedKey;
+            maxima[mergeAt].last = maxima[mergeAt + 1].last;
+            maxima.erase(maxima.begin() + (ptrdiff_t)mergeAt + 1);
+        }
+
+        // Keep the complete minimum plateau in both adjacent scoring domains.
+        // This avoids an arbitrary left/right choice when intensities are tied.
+        std::vector<ObservedMaximum> valleys;
+        for (size_t k = 1; k < maxima.size(); ++k)
+        {
+            const ObservedMaximum &left = maxima[k - 1];
+            const ObservedMaximum &right = maxima[k];
+            ObservedMaximum valley{left.last + 1, left.last + 1};
+            for (size_t p = left.last + 2; p < right.first; ++p)
+            {
+                if (intensities[p] < intensities[valley.first])
+                    valley = {p, p};
+                else if (intensities[p] == intensities[valley.first])
+                    valley.last = p;
+            }
+            if (!(intensities[valley.first] < std::min(intensities[left.first], intensities[right.first])))
+                throw std::runtime_error("Supported neighbouring maxima have no separating observed valley.");
+            valleys.push_back(valley);
+        }
+
+        for (size_t k = 0; k < maxima.size(); ++k)
+        {
+            std::vector<size_t> candidates;
+            std::vector<size_t> selectedStable;
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (support[i] != (int32_t)maxima[k].first)
+                    continue;
+                if (validRegressions->at(i).isValid)
+                    selectedStable.push_back(i);
+                else if (conflictingGroups[(size_t)apexGroups[i]])
+                    candidates.push_back(i);
+            }
+            // Preserve a previously selected stable description exactly. If
+            // two stable groups describe the same observed maximum, compare
+            // only those representatives and emit that maximum once.
+            if (selectedStable.size() == 1)
+                continue;
+            if (!selectedStable.empty())
+                candidates = selectedStable;
+            assert(!candidates.empty());
+
+            size_t limitLeft = length;
+            size_t limitRight = 0;
+            for (size_t i : candidates)
+            {
+                const Span_i32 span = validRegressions->at(i).span;
+                limitLeft = std::min(limitLeft, (size_t)span.startIdx);
+                limitRight = std::max(limitRight, (size_t)span.endIdx());
+            }
+            if (k > 0)
+                limitLeft = std::max(limitLeft, valleys[k - 1].first);
+            if (k < valleys.size())
+                limitRight = std::min(limitRight, valleys[k].last);
+            assert(limitLeft <= limitRight);
+
+            double bestSSE = INFINITY;
+            size_t best = count;
+            for (size_t i : candidates)
+            {
+                const RegCoeffs &coeffs = validRegressions->at(i).coeffs;
+                double sse = 0;
+                for (size_t p = limitLeft; p <= limitRight; ++p)
+                {
+                    const double prediction = std::exp(regAt(&coeffs, (double)p - (double)coeffs.x0));
+                    const double difference = (double)intensities[p] - prediction;
+                    sse += difference * difference;
+                    if (sse > bestSSE)
+                        break;
+                }
+                if (sse < bestSSE)
+                {
+                    bestSSE = sse;
+                    best = i;
+                }
+            }
+            if (best == count)
+                throw std::runtime_error("No finite fit error is available for a supported apex group.");
+            for (size_t i : selectedStable)
+                validRegressions->at(i).isValid = false;
+            validRegressions->at(best).isValid = true;
+        }
+
+        // Check the actual chosen fits, not rounded observation indices or
+        // former group seeds. Independent stable groups are preserved; every
+        // newly selected overlapping description must satisfy the old limit.
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (!validRegressions->at(i).isValid)
+                continue;
+            for (size_t j = i + 1; j < count; ++j)
+            {
+                if (!validRegressions->at(j).isValid || (initiallySelected[i] && initiallySelected[j]))
+                    continue;
+                const RegressionGauss &left = validRegressions->at(i);
+                const RegressionGauss &right = validRegressions->at(j);
+                if (left.span.endIdx() < right.span.startIdx || right.span.endIdx() < left.span.startIdx)
+                    continue;
+                if (std::abs(left.position - right.position) <= resolution)
+                    throw std::runtime_error("Selected overlapping fit apices remain below the existing resolution limit.");
+            }
+        }
     }
 
     static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[])
@@ -625,7 +886,8 @@ namespace qAlgorithms
                 bestRegIdx = i;
             }
         }
-        assert(bestRegIdx < regCount);
+        if (bestRegIdx == regCount)
+            throw std::runtime_error("No finite fit error is available for an apex group.");
         return bestRegIdx;
     }
 
@@ -990,11 +1252,14 @@ namespace qAlgorithms
         double x = 0;
         for (size_t i = 0; i < length; i++)
         {
-            double difference = obs[i] - (intercept - slope * x);
+            // linReg_intx returns the slope of y = intercept + slope * x.
+            // Reversing its sign inflates the null-model RSS and admits
+            // regressions which do not improve on a simple linear trend.
+            double difference = obs[i] - (intercept + slope * x);
             RSS += difference * difference;
             x += 1;
         }
-        assert(RSS > 0);
+        assert(RSS >= 0);
 
         return RSS;
     }
@@ -1019,6 +1284,10 @@ namespace qAlgorithms
         */
 
         double RSS_H0_cf2 = calcRSS_H0_cf2(intensities_log, range); // y = b0 + b1 * x
+        // A perfect linear fit is valid and cannot be improved by adding
+        // parameters. This also keeps zero null-model RSS out of F_value.
+        if (RSS_H0_cf2 <= RSS_reg_log)
+            return false;
         bool f_ok = F_test_regs(RSS_reg_log, RSS_H0_cf2, 4, 2, length, 0.05);
 
         return f_ok;
@@ -1167,13 +1436,17 @@ namespace qAlgorithms
             const EIC *bin = EICs->data() + eic_ID;
             const float *rt = bin->RT.data();
             size_t binLen = bin->df.size();
-            const int32_t status = qpeaks_find(bin->ints_area.data(),
-                        rt,
-                        bin->df.data(),
-                        binLen,
-                        &peaks);
+            int32_t status = 0;
+            try
+            {
+                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks);
+            }
+            catch (const std::exception &error)
+            {
+                throw std::runtime_error("Feature detection failed in EIC " + std::to_string(eic_ID) + ": " + error.what());
+            }
             if (status < 0)
-                throw std::runtime_error("Feature detection rejected an extracted ion chromatogram.");
+                throw std::runtime_error("Feature detection rejected EIC " + std::to_string(eic_ID) + ".");
             for (size_t peak = 0; peak < peaks.size(); peak++)
             {
                 FeaturePeak feat = peakToFeat(&peaks[peak], bin, eic_ID);
@@ -1241,11 +1514,16 @@ namespace qAlgorithms
                 continue;
             }
 
-            const int32_t peaksFound = qpeaks_find(spectrum_int.data(),
-                                                  spectrum_mz.data(),
-                                                  nullptr,
-                                                  spectrum_int.size(),
-                                                  &ret);
+            int32_t peaksFound = 0;
+            try
+            {
+                peaksFound = qpeaks_find(spectrum_int.data(), spectrum_mz.data(), nullptr, spectrum_int.size(), &ret);
+            }
+            catch (const std::exception &error)
+            {
+                throw std::runtime_error("Centroid detection failed at spectrum index " +
+                                         std::to_string(selectedIndices->at(specNum)) + ": " + error.what());
+            }
             if (peaksFound < 0)
                 throw std::runtime_error("Centroid detection rejected a spectrum.");
 
