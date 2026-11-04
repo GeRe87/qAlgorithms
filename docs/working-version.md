@@ -172,7 +172,7 @@ system zlib 1.3:
 
 The integration scenarios are grouped in the single `test_mzml_cli` CTest
 target. The sole failing target is the retained legacy `test_qpeaks` suite,
-which encounters the unresolved apex-conflict error described above. It has
+which stops at `pt_04`: three peaks are expected, but two are reported. It has
 not been disabled or marked as an expected success. The full CTest command
 therefore returns a failure status in both configurations.
 
