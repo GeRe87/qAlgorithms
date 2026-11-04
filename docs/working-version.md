@@ -150,11 +150,57 @@ its CSVs are diagnostic, not production whole-file exports. Its measured input
 contains 708 points; maximum anchors and bounds use their actual EIC RT values.
 The complete Debug and Release runs both import all 715 positive MS1 scans, produce 579351
 centroids and 7017 EICs, then fail explicitly at EIC 180 because no accepted
-fit covers its full unresolved envelope. Neither reaches negative-mode
+fit covers its full unresolved envelope with an apex inside the component
+hypothesis range. Neither reaches negative-mode
 feature construction or produces a complete positive or negative
 feature list. Earlier successful centroid-only runs covered 715 scans per
 polarity; that does not establish feature-list completeness. No partial
 successful-EIC export is promoted to a complete measurement result.
+
+### Complete per-polarity audit of the collective policy
+
+A private negative-only entry point changes only the polarity selection in the
+CLI, and links the same verified core library. It completes all 9490 negative
+EICs from 715 scans and 608532 centroids: 18640 descriptions, of which 1894 are
+collective (1880 infeasible, 14 search-limited), with 21187 maximum-anchor rows.
+All numeric fields, collective counts, bounds and companion references pass
+the exported-CSV audit. Debug and Release main/companion CSVs are byte-identical across the entire
+negative list. The private entry point reports 1307.683 s CPU time in Debug
+and 93.249 s in Release; these are observed runs, not a controlled benchmark.
+The state budget is not a wall-clock time guarantee.
+This is complete processing under the current description policy, not a count
+of resolved compounds or a quantitative validation.
+
+A separate Release diagnostic evaluates every positive and negative EIC, using
+the original bin ID in its output and retaining complete rejected-EIC manifests.
+It accepts 7011/7017 positive EICs; IDs 180, 432, 1664, 2190, 3494 and 3902 fail.
+Its positive `PARTIAL` list contains 19692 descriptions, including 2689
+collectives (2672 infeasible, 17 search-limited) and 32548 maximum-anchor rows.
+All six rejected traces are retained locally. Successful EICs without accepted
+peaks still count as processed; the missing six EICs may contain an unknown
+number of signals. The diagnostic returns status 1 for this partial result.
+Its separate negative audit has zero rejected EICs and matches the negative-only
+result by complete row contents and associated maxima. Equal-RT ties can receive
+different IDs when EICs are sorted individually before the final non-stable
+`std::sort`; this does not alter the descriptions or their metadata.
+
+EIC180's first failing component covers indices 388..419, RT
+456.527649..491.545532 seconds, with 12 associated maxima. Of 41814 accepted
+candidates in that continuum, 9812 eligible fits cover the full region; none
+has its fitted apex inside the component hypothesis. The closest covering
+candidate has apex 428.653839. Thus coverage of a window alone is insufficient;
+allowing an apex outside its component would require changing membership and
+neighbour guarantees. The exception's short coverage wording includes these
+additional eligibility conditions; the local proof and plot make them explicit.
+
+A per-description audit retains sample start/length, smallest/largest actual EIC
+RT interval and interval coefficient of variation (CV). All 19692 positive
+partial rows and all 18640 negative rows have non-identical observed intervals.
+Median CV is 0.05168335 positive and 0.04093320 negative; 6288 positive and 6225
+negative windows have CV above 0.2. These are descriptive interval variations,
+not estimated area errors or statistical acceptance thresholds. Missing EIC
+scans and acquisition timing both contribute. No area correction was introduced,
+and no row is labelled quantitatively area-validated.
 
 RT interpolation and area corrections remain deferred. Irregular RT intervals
 still prevent quantitative validation of areas and uncertainties. The next
