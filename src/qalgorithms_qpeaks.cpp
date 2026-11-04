@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <set>
+#include <functional>
 #if defined(_WIN32) && !defined(_USE_MATH_DEFINES)
     #define _USE_MATH_DEFINES // relevant for windows to have math constants
 #endif
@@ -545,6 +546,7 @@ namespace qAlgorithms
             valleys.push_back(valley);
         }
 
+        std::vector<std::vector<std::pair<double, size_t>>> choices(maxima.size());
         for (size_t k = 0; k < maxima.size(); ++k)
         {
             std::vector<size_t> candidates;
@@ -562,7 +564,10 @@ namespace qAlgorithms
             // two stable groups describe the same observed maximum, compare
             // only those representatives and emit that maximum once.
             if (selectedStable.size() == 1)
+            {
+                choices[k].push_back({0, selectedStable.front()});
                 continue;
+            }
             if (!selectedStable.empty())
                 candidates = selectedStable;
             assert(!candidates.empty());
@@ -592,9 +597,10 @@ namespace qAlgorithms
                     const double prediction = std::exp(regAt(&coeffs, (double)p - (double)coeffs.x0));
                     const double difference = (double)intensities[p] - prediction;
                     sse += difference * difference;
-                    if (sse > bestSSE)
-                        break;
+
                 }
+                if (std::isfinite(sse))
+                    choices[k].push_back({sse, i});
                 if (sse < bestSSE)
                 {
                     bestSSE = sse;
@@ -608,25 +614,104 @@ namespace qAlgorithms
             validRegressions->at(best).isValid = true;
         }
 
-        // Check the actual chosen fits, not rounded observation indices or
-        // former group seeds. Independent stable groups are preserved; every
-        // newly selected overlapping description must satisfy the old limit.
+        const auto compatible = [&](size_t i, size_t j) {
+            if (initiallySelected[i] && initiallySelected[j])
+                return true;
+            const auto &a = validRegressions->at(i);
+            const auto &b = validRegressions->at(j);
+            return a.span.endIdx() < b.span.startIdx || b.span.endIdx() < a.span.startIdx ||
+                   std::abs(a.position - b.position) > resolution;
+        };
+        bool conflict = false;
         for (size_t i = 0; i < count; ++i)
+            if (validRegressions->at(i).isValid)
+                for (size_t j = i + 1; j < count; ++j)
+                    if (validRegressions->at(j).isValid && !compatible(i, j))
+                        conflict = true;
+        if (!conflict)
+            return;
+
+        // Independently best descriptions can violate the distance constraint
+        // even when other accepted fits describe all the same supported maxima.
+        // Minimise the summed scoring-domain SSE jointly, retaining every
+        // maximum and each protected stable representative. Never drop a group
+        // to obtain a feasible answer.
+        std::vector<size_t> selected;
+        for (size_t i = 0; i < count; ++i)
+            if (initiallySelected[i] && support[i] < 0)
+                selected.push_back(i);
+        const size_t fixedCount = selected.size();
+        for (auto &options : choices)
+            std::sort(options.begin(), options.end());
+        // Disconnected apex ranges cannot constrain each other. Solve their
+        // components independently instead of multiplying unrelated alternatives.
+        std::vector<size_t> parent(choices.size());
+        std::vector<double> low(choices.size(), INFINITY), high(choices.size(), -INFINITY);
+        for (size_t k = 0; k < choices.size(); ++k)
         {
-            if (!validRegressions->at(i).isValid)
-                continue;
-            for (size_t j = i + 1; j < count; ++j)
+            parent[k] = k;
+            for (const auto &option : choices[k])
             {
-                if (!validRegressions->at(j).isValid || (initiallySelected[i] && initiallySelected[j]))
-                    continue;
-                const RegressionGauss &left = validRegressions->at(i);
-                const RegressionGauss &right = validRegressions->at(j);
-                if (left.span.endIdx() < right.span.startIdx || right.span.endIdx() < left.span.startIdx)
-                    continue;
-                if (std::abs(left.position - right.position) <= resolution)
-                    throw std::runtime_error("Selected overlapping fit apices remain below the existing resolution limit.");
+                const double position = validRegressions->at(option.second).position;
+                low[k] = std::min(low[k], position);
+                high[k] = std::max(high[k], position);
             }
+            if (choices[k].empty())
+                throw std::runtime_error("A supported maximum has no finite candidate fit.");
         }
+        const auto root = [&](size_t k) { while (parent[k] != k) k = parent[k]; return k; };
+        for (size_t i = 0; i < choices.size(); ++i)
+            for (size_t j = i + 1; j < choices.size(); ++j)
+                if (low[i] - high[j] <= resolution && low[j] - high[i] <= resolution)
+                    parent[root(j)] = root(i);
+        for (size_t component = 0; component < choices.size(); ++component)
+        {
+            if (root(component) != component)
+                continue;
+            std::vector<size_t> members;
+            for (size_t k = 0; k < choices.size(); ++k)
+                if (root(k) == component) members.push_back(k);
+            std::vector<double> lowerBound(members.size() + 1, 0);
+            for (size_t k = members.size(); k-- > 0;)
+                lowerBound[k] = lowerBound[k + 1] + choices[members[k]].front().first;
+            double bestCost = INFINITY;
+            std::vector<size_t> bestSelection;
+            size_t visited = 0;
+            std::function<void(size_t, double)> search = [&](size_t k, double cost) {
+                if (++visited > 200000)
+                    throw std::runtime_error("Joint apex selection exceeded its explicit search limit.");
+                if (cost + lowerBound[k] >= bestCost)
+                    return;
+                if (k == members.size())
+                {
+                    bestCost = cost;
+                    bestSelection = selected;
+                    return;
+                }
+                for (const auto &option : choices[members[k]])
+                {
+                    bool allowed = true;
+                    for (size_t other : selected)
+                        if (!compatible(option.second, other))
+                        { allowed = false; break; }
+                    if (!allowed)
+                        continue;
+                    selected.push_back(option.second);
+                    search(k + 1, cost + option.first);
+                    selected.pop_back();
+                }
+            };
+            const size_t expected = selected.size() + members.size();
+            search(0, 0);
+            if (bestSelection.size() != expected)
+                throw std::runtime_error("No compatible accepted fits describe all supported maxima.");
+            selected = std::move(bestSelection);
+        }
+        assert(selected.size() == fixedCount + choices.size());
+        for (auto &reg : *validRegressions)
+            reg.isValid = false;
+        for (size_t i : selected)
+            validRegressions->at(i).isValid = true;
     }
 
     static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[])

@@ -375,6 +375,54 @@ static void test_indexed_grouping_matches_pairwise_graph()
     }
 }
 
+static void test_joint_selection_keeps_both_supported_maxima()
+{
+    // Reduced ten-point profile: the independently best fits have apices
+    // 3.4154 and 6.3443, below the existing three-sample resolution limit.
+    // The already accepted alternative at 2.6431 allows both maxima to remain.
+    std::vector<float> y = {32892.6719F,63924.832F,86557.8672F,87380.4922F,
+        76967.9922F,76014.4922F,84940.7188F,84153.8281F,63490.9297F,34147.457F};
+    for (int reflected = 0; reflected < 2; ++reflected)
+    {
+        std::vector<float> x(y.size());
+        for (size_t i = 0; i < x.size(); ++i) x[i] = float(i);
+        std::vector<RegressionGauss> peaks;
+        const auto count = qpeaks_find(y.data(), x.data(), nullptr, y.size(), &peaks);
+        assert(count == 2, "Joint selection must retain both supported maxima", NULL);
+        std::sort(peaks.begin(), peaks.end(), [](const auto &a,const auto &b){return a.position < b.position;});
+        assert(std::abs(peaks[0].position - 3) < 0.5 && std::abs(peaks[1].position - 6) < 0.5,
+               "Selected fits must remain near both observed maxima", NULL);
+        assert(peaks[1].position - peaks[0].position > 3 + 2 * FLT_EPSILON,
+               "Jointly chosen fits must satisfy the unchanged resolution limit", NULL);
+        std::reverse(y.begin(), y.end());
+    }
+    // Two separated copies must be solved independently without losing a maximum.
+    std::vector<float> x(10), logs(10);
+    for (size_t i = 0; i < 10; ++i) { x[i] = float(i); logs[i] = std::log(y[i]); }
+    std::vector<RegCoeffs> coefficients;
+    findCoefficients(logs.data(), y.size(), &coefficients);
+    std::vector<RegressionGauss> candidates;
+    validateRegressions(y.data(), logs.data(), x.data(), nullptr, &coefficients, y.size(), &candidates);
+    const size_t originalCount = candidates.size();
+    for (size_t i = 0; i < originalCount; ++i)
+    {
+        auto copy = candidates[i];
+        copy.position += 30; copy.coeffs.x0 += 30; copy.span.startIdx += 30;
+        candidates.push_back(copy);
+    }
+    std::vector<float> combined(40, 5);
+    std::copy(y.begin(), y.end(), combined.begin());
+    std::copy(y.begin(), y.end(), combined.begin() + 30);
+    std::vector<int16_t> groups(candidates.size());
+    const size_t groupCount = groupRegsByApex(&candidates, groups.data());
+    std::vector<bool> conflicting(groupCount, true);
+    resolveApexGroups(&candidates, combined.data(), combined.size(), groups.data(), conflicting);
+    size_t retained = 0;
+    for (const auto &candidate : candidates) retained += candidate.isValid;
+    assert(retained == 4, "Independent joint-selection components must retain all four maxima", NULL);
+
+}
+
 static void test_linear_null_model_residuals()
 {
     // These residuals are orthogonal to both columns of the linear model:
@@ -1098,6 +1146,7 @@ int main(int argc, const char *argv[])
     test_apex_grouping_more_than_128_candidates();
     test_apex_grouping_order_and_reflection();
     test_indexed_grouping_matches_pairwise_graph();
+    test_joint_selection_keeps_both_supported_maxima();
     test_known_reflected_three_peak_grouping();
     test_features_follow_eic_retention_times();
     test_centroid_id_above_uint16();

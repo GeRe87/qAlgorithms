@@ -50,6 +50,63 @@ apices remain explicit errors. Statistical acceptance thresholds are unchanged.
 This is a bounded selection of peak descriptions, not quantitative deconvolution
 or proof that two reported features correspond to two chemical compounds.
 
+## Joint fit selection continuation
+
+Independently minimising fit error for each supported maximum can select
+mutually incompatible apices, even when other already accepted fits satisfy
+the existing resolution limit. The resolver now tries joint selection only
+when those independent choices conflict. It minimises the sum of the existing
+raw-intensity scoring-domain SSEs, retaining one unchanged accepted description
+for every supported maximum/group and preserving stable representatives. Apex
+ranges that cannot interact are solved independently. A search exceeding
+200,000 visited states per interacting component remains an explicit processing
+error; an infeasible component also remains an explicit error. Neither case
+returns a reduced set of peaks as success. Acceptance thresholds are unchanged.
+
+A reduced ten-point profile checks two retained maxima, unchanged separation
+requirements, and reflection. A separate two-copy test checks four retained
+maxima across independent components. The existing numerical and synthetic CLI
+regressions pass in native Debug and Release. The full suite remains 6/10:
+`pt_03`, `pt_04`, their containing legacy suite, and the exact beta-inverse
+comparison remain failing with their original expectations.
+
+The isolated original positive EIC 115 now completes with seven fits, and the
+entire original negative spectrum 1917 completes with 900 centroids, in both
+Debug and Release. These counts are reproducibility checks, not reference
+chemical feature counts. The complete centroid-only CLI run now succeeds for
+all 715 scans per polarity: 578,984 positive and 608,230 negative centroids.
+The corresponding Debug and Release CSVs are byte-identical.
+
+The strict full-file feature CLI still exits nonzero: its first unresolved
+positive trace is now EIC 120 (no compatible accepted fits for all supported
+maxima). The private positive diagnostic completes all 7,070 EICs, with 684
+failed EICs and 5,006 retained PARTIAL feature candidates. This recovers 155
+complete EICs relative to the previous snapshot. All 3,962 previously returned
+positive feature descriptions are preserved byte-for-byte as CSV fields except
+for sequential output IDs, and no previously successful EIC now fails.
+All positive numeric fields
+are finite and areas/heights positive, IDs unique, retention times sorted, and
+no returned feature refers to a failed EIC. The 684 failures comprise 500
+infeasible selections, 138 explicit search-limit errors, 45 missing separating
+valleys, and one missing supported maximum. No failed EIC contributes partial
+features. The negative diagnostic also completes all 9,516 EICs: 613 fail, and 8,138
+PARTIAL feature candidates are retained. Its failures are 451 infeasible joint
+selections, 130 explicit search-limit errors and 32 missing separating valleys.
+All negative numeric fields are finite, areas/heights positive, IDs unique and
+RTs sorted, and no feature refers to a failed EIC. In 5,275 negative feature
+windows max(dt)/min(dt) exceeds 1.1. The diagnostic runtime was 414.105 seconds
+for both polarities on this Windows machine; this includes writing raw EIC
+observations and is not a strict successful processing benchmark. Its inherited
+final success message and exit zero refer only to completing the diagnostic
+iteration; the PARTIAL labels, failure manifests and strict CLI exit one remain
+authoritative about completeness. The earlier counts below are historical snapshots.
+
+In 3,468 positive feature windows max(dt)/min(dt) exceeds 1.1, using measured
+points within CSV bounds with a 1e-4 second rounding tolerance. Quantitative
+area/shape/uncertainty validity remains unresolved for all features. The joint
+selector changes fit selection, not the even-spacing assumption or fit
+coefficients. It is not a quantitative deconvolution method.
+
 ## Native Windows continuation, 2026-11-04
 
 Source baseline: `c00e415c4a0520f6a87cc1af27aaacad11a27818`.
