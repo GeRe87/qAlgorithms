@@ -142,10 +142,15 @@ remain unchanged; exactly 192 descriptions are added from the six repaired
 EICs. The entire negative main/companion pair remains byte-identical to the
 previous verified complete result. The final global protection check also
 leaves all four successful real-output files byte-identical. Release reports
-314.264 seconds CPU time for the full file; this is an observed run, not a
-controlled benchmark. The full optimised Debug assertion run is still pending
-at this code checkpoint; standard Debug verification below covers all six
-repaired real EICs and the complete synthetic/regression suite.
+314.264 seconds program-reported time for the full file; this is an observed run, not a
+controlled benchmark. The full optimised Debug assertion run (`-Og -g`,
+`NDEBUG` unset) also completes with exit status 0 and all four main/companion
+CSVs byte-identical to Release. It reports 1449.708 seconds. Standard Debug
+without optimisation is verified on the entire synthetic/regression suite and
+all six repaired real EICs; a final full-file unoptimised run is not claimed.
+An earlier such run was superseded and stopped for the additional global
+protection correction. The optimised Debug run is the completed whole-file
+assertion check; a state-count budget still gives no fixed runtime guarantee.
 
 The six repaired EICs have 49, 33, 40, 30, 19 and 21 descriptions respectively
 (IDs 180, 432, 1664, 2190, 3494, 3902). Their isolated CSV pairs are byte-identical
@@ -260,7 +265,7 @@ EICs from 715 scans and 608532 centroids: 18640 descriptions, of which 1894 are
 collective (1880 infeasible, 14 search-limited), with 21187 maximum-anchor rows.
 All numeric fields, collective counts, bounds and companion references pass
 the exported-CSV audit. Debug and Release main/companion CSVs are byte-identical across the entire
-negative list. The private entry point reports 1307.683 s CPU time in Debug
+negative list. The private entry point reports 1307.683 s program-reported time in Debug
 and 93.249 s in Release; these are observed runs, not a controlled benchmark.
 The state budget is not a wall-clock time guarantee.
 This is complete processing under the current description policy, not a count
