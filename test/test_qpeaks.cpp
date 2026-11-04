@@ -528,6 +528,74 @@ static void test_joint_search_propagates_constraints_without_dropping_groups()
     assert(rejected, "Constraint propagation must prove infeasibility within the unchanged search budget", NULL);
 }
 
+static void test_peak_height_uncertainty_matches_independent_propagation()
+{
+    // Build and invert the design Gram matrix independently of the stored
+    // inverse and matProductReg. Compare against finite differences of H.
+    for (uint16_t scale : {uint16_t(2),uint16_t(3),uint16_t(8),uint16_t(25),uint16_t(100),uint16_t(215)})
+    {
+        long double augmented[4][8] = {};
+        for (int t=-int(scale);t<=int(scale);++t)
+        {
+            const long double row[4]={1,(long double)t,t<0?(long double)t*t:0,t>0?(long double)t*t:0};
+            for(size_t i=0;i<4;++i)for(size_t j=0;j<4;++j)augmented[i][j]+=row[i]*row[j];
+        }
+        for(size_t i=0;i<4;++i)augmented[i][i+4]=1;
+        for(size_t i=0;i<4;++i)
+        {
+            size_t pivot=i;
+            for(size_t j=i+1;j<4;++j)if(std::abs(augmented[j][i])>std::abs(augmented[pivot][i]))pivot=j;
+            for(size_t j=0;j<8;++j)std::swap(augmented[i][j],augmented[pivot][j]);
+            const long double divisor=augmented[i][i];
+            assert(divisor!=0,"Independent design matrix must be invertible",NULL);
+            for(size_t j=0;j<8;++j)augmented[i][j]/=divisor;
+            for(size_t k=0;k<4;++k)if(k!=i)
+            {
+                const long double factor=augmented[k][i];
+                for(size_t j=0;j<8;++j)augmented[k][j]-=factor*augmented[i][j];
+            }
+        }
+        for(double slope:{-0.4,0.0,0.4})for(double heightScale:{0.01,1.0,10000.0})for(bool convexTail:{false,true})
+        {
+            if(slope==0 && convexTail)continue;
+            RegCoeffs c{std::log(100.0*heightScale),slope,-0.2,-0.3,scale,scale};
+            if(convexTail) { if(slope<0)c.b3=0.07;else c.b2=0.07; }
+            const auto height=[](const RegCoeffs &r){
+                const double apex=peakPosition(&r);
+                const double curvature=apex<0?r.b2:r.b3;
+                return std::exp(r.b0+r.b1*apex+curvature*apex*apex);
+            };
+            long double gradient[4]={};
+            for(size_t j=0;j<4;++j)
+            {
+                RegCoeffs plus=c,minus=c;
+                double *p[]={&plus.b0,&plus.b1,&plus.b2,&plus.b3};
+                double *m[]={&minus.b0,&minus.b1,&minus.b2,&minus.b3};
+                const double step=1e-6;
+                *p[j]+=step;*m[j]-=step;
+                gradient[j]=(height(plus)-height(minus))/(2*step);
+            }
+            const double mse=0.025;
+            long double variance=0;
+            for(size_t i=0;i<4;++i)for(size_t j=0;j<4;++j)
+                variance+=gradient[i]*augmented[i][j+4]*gradient[j]*mse;
+            const double expected=std::sqrt((double)variance);
+            const double actual=peakHeightUncert(&c,mse);
+            assert(std::abs(actual-expected)<=2e-6*expected,
+                   "Height uncertainty must match finite differences and an independent inverse (scale %u)",unsigned(scale));
+            auto brighter=c;brighter.b0+=std::log(7.0);
+            assert(std::abs(peakHeightUncert(&brighter,mse)/actual-7.0)<1e-11,
+                   "Changing intensity units must scale absolute height uncertainty by the same factor",NULL);
+            auto reflected=c;reflected.b1=-reflected.b1;std::swap(reflected.b2,reflected.b3);
+            assert(std::abs(peakHeightUncert(&reflected,mse)-actual)<=1e-12*actual,
+                   "Reflection must preserve height uncertainty",NULL);
+            assert(peakHeightUncert(&c,0)==0,"Zero supplied residual variance gives zero first-order uncertainty",NULL);
+            assert(std::abs(peakHeightUncert(&c,mse/4)/actual-0.5)<1e-12,
+                   "Standard uncertainty must scale with residual standard deviation",NULL);
+        }
+    }
+}
+
 static void test_exact_log_fit_allows_zero_residual()
 {
     RegressionGauss reg;
@@ -1616,6 +1684,12 @@ int main(int argc, const char *argv[])
         return 0;
     }
 
+    if (argc == 2 && std::strcmp(argv[1], "--height-uncertainty-only") == 0)
+    {
+        test_peak_height_uncertainty_matches_independent_propagation();
+        control_sim_gauss();
+        return 0;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--legacy-pt03") == 0)
         return test_qpeaks_find(&pt_03);
     if (argc == 2 && std::strcmp(argv[1], "--legacy-pt04") == 0)
@@ -1633,6 +1707,7 @@ int main(int argc, const char *argv[])
     test_centroid_id_above_uint16();
     test_linear_null_model_residuals();
     test_log_fit_acceptance_precedes_height_correction();
+    test_peak_height_uncertainty_matches_independent_propagation();
     test_exact_log_fit_allows_zero_residual();
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();

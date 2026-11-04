@@ -2414,36 +2414,25 @@ namespace qAlgorithms
 
     double peakHeightUncert(const RegCoeffs *c, const double mse)
     {
-        // height: exp( b0 + b1 * -b1 / (2 b23) + b23 * (-b1 / (2 b23))^2 )
-        // = exp( b0 + (-b1^2 / (2 b23)) + (b23 * b1^2 / (4 b23^2)) )
-        // = exp( b0 + (-b1^2 / (2 b23)) * (2 / 2) + b1^2 / (4 b23) )
-        // = exp( b0 - b1^2 / (4 b23) )
-        // We only deal with the log form here: b0 - b1^2 / (4 b23)
+        // Conditional first-order propagation for H = exp(b0-b1^2/(4*b23)),
+        // given the supplied log-coefficient covariance mse*(X^T X)^(-1).
+        // This does not recalibrate that covariance after correctB0 or account
+        // for model selection, truncation, or irregular acquisition timing.
+        assert(mse >= 0);
+        const bool apex_left = c->b1 < 0;
+        const double b23 = apex_left ? c->b2 : c->b3;
+        const double b1_sq = c->b1 * c->b1;
+        const double height = std::exp(c->b0 - b1_sq / (4 * b23));
 
-        bool apex_left = c->b1 < 0;
-        double b23 = apex_left ? c->b2 : c->b3;
-        double b1_sq = c->b1 * c->b1;
-        // double height = exp(c->b0 - b1_sq / (4 * b23));
-
-        // uncertainty: calculate uncertainty for the logarithmic case, then transform back
-        // note: this leads to two values for uncertainty
-        double deriv_b0 = -b1_sq / (4 * b23);
-        double deriv_b1 = c->b0 - c->b1 / (2 * b23); // b0 + apex position
-        double deriv_b23 = c->b0 + b1_sq / (4 * b23 * b23);
-        // assign jacobian
-        double J[4] = {deriv_b0, deriv_b1, 0, 0};
-        J[apex_left ? 2 : 3] = deriv_b23;
-
-        // double J_exp[4] = {height, -c->b1 * height / (2 * b23), 0, 0};
-        // J_exp[apex_left ? 2 : 3] = b1_sq * height / (4 * b23 * b23);
-        // double u_exp = matProductReg(J_exp, c->scale);
-        // double test_u = sqrt(u_exp * mse_exp); // both u_exp and the MSE are too large. The combination via square root is also wrong (?)
-
-        double u = matProductReg(J, c->scale);
-        assert(u > 0);
-        double uncert = sqrt(u * mse);
-        // assert(uncert == test_u); // calculating the error for the exponential case directly leads to wrong results
-        return uncert;
+        // Gradient of log(H): [1, -b1/(2*b23), b1^2/(4*b23^2)]
+        // with the curvature derivative assigned to the apex-bearing side.
+        double J[4] = {1, -c->b1 / (2 * b23), 0, 0};
+        J[apex_left ? 2 : 3] = b1_sq / (4 * b23 * b23);
+        const double varianceFactor = matProductReg(J, c->scale);
+        assert(varianceFactor > 0);
+        // Multiplication by H converts log-height uncertainty to the same
+        // intensity units as the returned peak height.
+        return height * std::sqrt(varianceFactor * mse);
     }
 
 } // namespace qAlgorithms

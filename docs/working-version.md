@@ -82,6 +82,88 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
+## Conditional height uncertainty and validation audit (current continuation)
+
+The reported `heightUncertainty` now uses the correct first-order derivative
+and intensity units for H = exp(b0-b1^2/(4*b23)). Given the existing supplied
+coefficient covariance mse*(X^T X)^(-1), the log-height gradient is
+[1, -b1/(2*b23), b1^2/(4*b23^2)], with the last entry assigned to the
+apex-bearing curvature. The standard uncertainty is H*sqrt(mse*g^T M g).
+The previous implementation used terms containing b0 in the shape derivatives,
+used a zero b0 derivative at a centred peak, and returned an unconverted
+log-domain quantity in the absolute-height field.
+
+This corrects the helper's conditional error propagation, not the calibration
+of its input covariance. The nonlinear raw-height correction, selected-model
+conditioning, trimmed-window residual estimate, irregular RT and uncertainty
+coverage still require separate validation. Areas and their uncertainty
+formula are unchanged. No interpolation, new inverse-matrix calculation or
+statistical threshold is introduced in production. Everything outside this
+one helper in qalgorithms_qpeaks.cpp is byte-identical to commit 8199bff.
+The height-uncertainty field is copied/exported, not consumed by acceptance,
+grouping, binning, DQS or area construction.
+
+Ninety independent numerical cases cover scales 2, 3, 8, 25, 100 and 215,
+left/right/centred apices, intensity scaling and convex non-apex tails. Finite
+differences of the height function and an independently assembled/inverted
+4x4 design Gram matrix agree with the new helper. Additional checks enforce
+intensity-unit scaling, reflection, residual-standard-deviation scaling and
+zero supplied variance. The original helper fails this new independent
+reference test. The original simulated-Gaussian height check passes unchanged.
+These checks and all original numerical/15 CLI scenarios pass in Release,
+standard Debug and assertion-enabled -Og Debug. Full CTest retains exactly the
+four known failures (6/10); no original assertion is relaxed.
+
+The full real-file Release pipeline completes with status 0, retaining 19884
+positive and 18640 negative rows. All 38524 `heightUncertainty` cells change;
+every other field and both maximum-companion files are exactly unchanged.
+The earlier timing-window audits remain valid because IDs, spans, coefficients,
+RT coordinates and areas are unchanged. A private instrumented capture emits
+all unrounded selected coefficients, the actual residual variance estimate and
+the resulting float uncertainty; its four production CSVs are byte-identical
+to the normal pipeline. Replay of all 38524 scalar calculations in Release,
+standard Debug and -Og Debug has zero float-bit mismatches and is bound back
+to the production CSV values. The whole current pipeline is rerun in Release;
+the new complete Debug check is scalar replay, not another whole-file Debug
+pipeline run. The preceding full-pipeline Debug/Release checks below refer to
+the preceding height-uncertainty values.
+
+The pt_03/pt_04 acceptance problem is now separated from grouping. In the
+unchanged cascade, pt_03 has 66 accepted fits among 1631 tested shape windows,
+40 of those accepted fits use a trimmed window; selection returns two peaks.
+For pt_04 only two of six tested shape windows pass validation. Its first-peak
+candidate uses a complete five-point window and F=102.483588811 versus 199.5;
+it is rejected before grouping. The original expected counts remain 0 and 3.
+
+A separate design-domain audit confirms that coefficients are estimated on
+the full symmetric window, whereas residuals, degrees of freedom and the
+linear-null comparison can use a trimmed shape window. The precomputed
+coefficient covariance still belongs to the full design. Relative normal-
+equation residuals are below 5.3e-8 on the fit domain but can reach 0.033
+(pt_03) / 0.391 (pt_04) on the shape domain. This leaves the standard nested-
+OLS interpretation of those trimmed-window F tests unestablished. A private
+full-domain variant reports four instead of two pt_03 peaks and still two
+pt_04 peaks. It is not adopted: changing domains alone does not satisfy the
+retained controls and needs a justified statistical-method decision.
+
+A seeded exploratory null experiment also distinguishes one fixed-window test
+from the complete adaptive search. Among 1000 99-sample flat-positive-baseline
+log-Gaussian traces, the fixed 19-point full-window F test rejects 66 times;
+the complete search successfully emits descriptions for 945 traces, reports
+33 errors and successfully emits zero descriptions for 22. Corresponding
+raw-Gaussian counts are 59 fixed-window rejections, 931 positive outputs,
+38 errors and 31 zero outputs. Errors are never counted as successful zero
+results. These are two specified synthetic positive-baseline generators, not
+an instrument-noise validation; the baseline-free input precondition is not
+established for them. They cannot supply a calibrated false-discovery rate
+for the real measurement. Local alpha=0.05 must not be interpreted as a
+5% error guarantee for the entire EIC search. No multiplicity correction or
+new acceptance rule is applied without a stated scientific target.
+
+The following grouping continuation records the previous checkpoint. Its
+complete processing counts remain valid; its height-uncertainty values are
+superseded by the correction above. RT/area corrections remain deferred.
+
 ## Closed collective envelopes (current continuation)
 
 The six previously failing positive EICs now complete without weakening the
