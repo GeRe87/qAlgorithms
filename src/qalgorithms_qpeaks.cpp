@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
+#include <set>
 #if defined(_WIN32) && !defined(_USE_MATH_DEFINES)
     #define _USE_MATH_DEFINES // relevant for windows to have math constants
 #endif
@@ -637,6 +638,9 @@ namespace qAlgorithms
         const double resolution = 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON;
         size_t groupCount = 0;
         std::vector<size_t> pending;
+        std::set<std::pair<double, size_t>> remaining;
+        for (size_t i = 0; i < length; ++i)
+            remaining.emplace(validRegressions->at(i).position, i);
         for (size_t seed = 0; seed < length; ++seed)
         {
             if (apexGroups[seed] != -1)
@@ -645,6 +649,7 @@ namespace qAlgorithms
                 throw std::runtime_error("Too many apex groups in a single profile region.");
             const int16_t group = (int16_t)groupCount++;
             apexGroups[seed] = group;
+            remaining.erase({validRegressions->at(seed).position, seed});
             pending.clear();
             pending.push_back(seed);
             // Connected components of pairwise proximity AND window overlap.
@@ -654,10 +659,10 @@ namespace qAlgorithms
             for (size_t next = 0; next < pending.size(); ++next)
             {
                 const RegressionGauss &member = validRegressions->at(pending[next]);
-                for (size_t i = 0; i < length; ++i)
+                auto it = remaining.lower_bound({member.position - resolution, 0});
+                while (it != remaining.end() && it->first < member.position + resolution)
                 {
-                    if (apexGroups[i] != -1)
-                        continue;
+                    const size_t i = it->second;
                     const RegressionGauss &candidate = validRegressions->at(i);
                     const bool overlap =
                         candidate.span.startIdx < member.span.startIdx + member.span.length &&
@@ -666,7 +671,10 @@ namespace qAlgorithms
                     {
                         apexGroups[i] = group;
                         pending.push_back(i);
+                        it = remaining.erase(it);
                     }
+                    else
+                        ++it;
                 }
             }
         }

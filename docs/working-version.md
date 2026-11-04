@@ -92,13 +92,40 @@ F-test; grouping cannot recover it. `pt_03` admits broad near-baseline fits and
 selects two features. Resolving these acceptance problems requires further
 statistical/model work rather than tuning thresholds to the two fixtures.
 
-The original real input `/mnt/data/230222_SFC_Modelling_MixF_01_20.mzML`
-is not present in this Windows session, and the referenced chat exposes no
-retrievable attachment. No real-file rerun, input hash, 715-scan count verification,
-complete positive/negative CSVs, or area validation was possible. The historical
-4,613/6,999 candidate counts and 772/785 failed EICs remain unverified partial
-results from the prior session. Do not present the synthetic CSVs as this sample.
-Irregular RT spacing and quantitative uncertainty remain unresolved as below.
+### Real sample now available
+
+The user supplied the Windows location of
+`230222_SFC_Modelling_MixF_01_20.mzML` (270,841,344 bytes), SHA-256
+`b072c6bf1331bed1b1d6cb74ccaaad9bad9640a5e1d8b3f2988887a5d82a8da9`.
+Independent XML inspection confirms 715 MS1 scans per polarity. Scan intervals
+range from 0.618403 to 1.407683 seconds positive and 0.648982 to 1.485695
+seconds negative; 180/181 of 714 intervals differ by over 10% from their
+polarity median. Areas and uncertainties remain quantitatively unvalidated.
+
+Strict Debug and Release stop at positive EIC 115. A private diagnostic, which
+retains features only when an entire EIC succeeds, inspected all 7,070 positive
+EICs: 839 failed and 3,962 features were retained. All numeric CSV fields are
+finite and areas/heights positive. The CSV is explicitly PARTIAL. Failures are
+793 unresolved selected-apex distances, 45 missing separating valleys, and one
+missing supported maximum. Original EIC IDs are preserved in a separate failure
+manifest; the inner singleton diagnostic error calls its local EIC zero.
+
+The diagnostic cannot produce a negative feature list: negative centroiding
+fails at original spectrum index 1917 with the unresolved selected-apex-distance
+error. No spectrum is skipped. Historical negative feature counts therefore
+are not reproduced by this revision and must not be reused as current results.
+
+In 2,717 of the 3,962 positive feature RT windows, the largest observed interval
+exceeds the smallest by more than 10%. This audit uses measured points between
+the rounded CSV RT bounds (1e-4 second inclusion tolerance). It is a spacing
+indicator, not an area-error estimate. No feature area is analytically validated.
+
+The group traversal now indexes unassigned candidates by apex position, removes
+each assigned candidate from that index, and checks only nearby candidates.
+This preserves the pairwise graph definition while avoiding repeated full-list
+scans on long real EICs. An independent all-pairs transitive-reachability oracle
+checks 50 sets of 24 windows, in addition to the original permutation/reflection
+tests. Native Debug/Release retain the same six passing and four failing targets.
 
 For writable temporary test files in PowerShell, set `TEMP` and `TMP` to an
 existing writable directory before CTest. The first attempt using the restricted

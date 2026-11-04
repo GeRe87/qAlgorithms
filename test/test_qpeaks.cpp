@@ -343,6 +343,38 @@ static void test_apex_grouping_order_and_reflection()
            "A singleton must receive a valid group ID", NULL);
 }
 
+static void test_indexed_grouping_matches_pairwise_graph()
+{
+    // Independent all-pairs reachability oracle, including disjoint windows.
+    for (size_t trial = 0; trial < 50; ++trial)
+    {
+        const size_t n = 24;
+        std::vector<RegressionGauss> candidates(n);
+        bool reachable[n][n] = {};
+        for (size_t i = 0; i < n; ++i)
+        {
+            candidates[i].span = {int32_t((i * 17 + trial * 7) % 50), int32_t(5 + (i * 11 + trial) % 16)};
+            candidates[i].position = float(candidates[i].span.startIdx) + float(candidates[i].span.length - 1) / 2;
+        }
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j)
+                reachable[i][j] = i == j ||
+                    (std::abs(candidates[i].position - candidates[j].position) < 2 * GLOBAL_MINSCALE - 1 + 2 * FLT_EPSILON &&
+                     candidates[i].span.startIdx <= candidates[j].span.endIdx() &&
+                     candidates[j].span.startIdx <= candidates[i].span.endIdx());
+        for (size_t k = 0; k < n; ++k)
+            for (size_t i = 0; i < n; ++i)
+                for (size_t j = 0; j < n; ++j)
+                    reachable[i][j] = reachable[i][j] || (reachable[i][k] && reachable[k][j]);
+        int16_t groups[n];
+        groupRegsByApex(&candidates, groups);
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j)
+                assert((groups[i] == groups[j]) == reachable[i][j],
+                       "Indexed grouping differs from pairwise graph", NULL);
+    }
+}
+
 static void test_linear_null_model_residuals()
 {
     // These residuals are orthogonal to both columns of the linear model:
@@ -1065,6 +1097,7 @@ int main(int argc, const char *argv[])
     test_peak_at_region_boundaries_and_cumulative_df();
     test_apex_grouping_more_than_128_candidates();
     test_apex_grouping_order_and_reflection();
+    test_indexed_grouping_matches_pairwise_graph();
     test_known_reflected_three_peak_grouping();
     test_features_follow_eic_retention_times();
     test_centroid_id_above_uint16();
