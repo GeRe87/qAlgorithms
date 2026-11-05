@@ -1008,6 +1008,11 @@ mode and does not change the CLI's failure status.
 
 ## Next acceptance work
 
+The experimental [real-data component comparison](../experiments/qpeaks_ensemble/REAL_DATA.md)
+now binds all 38524 prior feature windows to fresh native EIC exports. Its
+14 selected fits retain one unconverged best candidate and all failed starts;
+it changes neither production output nor the unresolved expectations below.
+
 1. Resolve the retained `pt_03` / `pt_04` expectations through a justified
    statistical/model decision while keeping their failures visible until then.
 2. Quantitatively validate areas, shapes and uncertainties with known signals;

@@ -223,3 +223,7 @@ pt_03/pt_04 expectations remain unchanged and unresolved.
 Related primary-method precedents, not drop-in guarantees for this prototype:
 [SiZer](https://doi.org/10.1080/01621459.1999.10474186) and
 [multiscale mass-spectrum peak detection](https://doi.org/10.1093/bioinformatics/btl355).
+
+The [real mzML extension](REAL_DATA.md) applies the conditional component
+comparison to freshly exported real EIC windows, with complete input accounting
+and explicit unconverged fits. It does not turn diagnostic fits into peak counts.
