@@ -7,6 +7,8 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
+#include <stdexcept>
 #include <math.h>
 #include <vector>
 
@@ -530,7 +532,10 @@ namespace qAlgorithms
         for (size_t i = 0; i < eicsize; i++)
         {
             const CentroidPeak *point = pointsInBin[i];
-            assert(point->area > 1);
+            // Positive areas can be smaller than one in valid axis/intensity
+            // units. Reject nonrepresentable values in Release as well as Debug.
+            if (!std::isfinite(point->area) || point->area <= 0)
+                throw std::invalid_argument("Centroid area must be finite and positive.");
 
             tmp_rt[i] = retentionTimes->at(point->number_MS1);
             tmp_scanNumbers[i] = point->number_MS1;

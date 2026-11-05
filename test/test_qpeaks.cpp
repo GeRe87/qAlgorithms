@@ -1673,6 +1673,50 @@ static void test_areaPrediction()
     assert(area_t > uncert, "Too high uncertainty\n", NULL);
 }
 
+static void test_acceptance_independent_of_axis_units()
+{
+    // The same physical axis in seconds and minutes must give the same peak.
+    // This low-height signal formerly passed with seconds but failed with
+    // minutes solely because its numeric area crossed the hard-coded e cutoff.
+    const size_t length = 81;
+    std::vector<float> intensities(length), axis(length);
+    for (size_t i = 0; i < length; ++i)
+    {
+        const double x = double(i) - 40;
+        intensities[i] = float(10 * std::exp(-x * x / 18));
+    }
+    RegressionGauss reference;
+    bool haveReference = false;
+    for (double step : {0.1, 0.1 / 60, 1.0})
+    {
+        for (size_t i = 0; i < length; ++i)
+            axis[i] = float(double(i) * step);
+        std::vector<RegressionGauss> peaks;
+        verify(qpeaks_find(intensities.data(), axis.data(), nullptr, length, &peaks) == 1);
+        verify(peaks.size() == 1);
+        const auto &peak = peaks.front();
+        const double analyticArea = 10 * 3 * std::sqrt(2 * M_PI) * step;
+        verify(std::abs(peak.position / (40 * step) - 1) < 128 * FLT_EPSILON);
+        // Both coordinates and exported area are float; subtracting adjacent
+        // coordinates at the apex contributes to the rounding error bound.
+        verify(std::abs(peak.area / analyticArea - 1) < 128 * FLT_EPSILON);
+        if (haveReference)
+        {
+            verify(peak.coeffs.b0 == reference.coeffs.b0);
+            verify(peak.coeffs.b1 == reference.coeffs.b1);
+            verify(peak.coeffs.b2 == reference.coeffs.b2);
+            verify(peak.coeffs.b3 == reference.coeffs.b3);
+            verify(peak.coeffs.x0 == reference.coeffs.x0);
+            verify(peak.coeffs.scale == reference.coeffs.scale);
+        }
+        else
+        {
+            reference = peak;
+            haveReference = true;
+        }
+    }
+}
+
 int main(int argc, const char *argv[])
 {
     // initialise seed for noise generating funtions
@@ -1695,6 +1739,7 @@ int main(int argc, const char *argv[])
     if (argc == 2 && std::strcmp(argv[1], "--legacy-pt04") == 0)
         return test_qpeaks_find(&pt_04);
 
+    test_acceptance_independent_of_axis_units();
     test_apex_conversion_nonunit_spacing();
     test_weighted_mean_ignores_interpolated_values();
     test_peak_at_region_boundaries_and_cumulative_df();

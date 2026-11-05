@@ -1,5 +1,6 @@
 #include "../src/qalgorithms_qbin.cpp" // NOLINT
 #include "common_test_utils.hpp"
+#include <limits>
 
 using namespace qAlgorithms;
 
@@ -43,8 +44,42 @@ static void test_create_eic_counts_measured_points()
            "A three-centroid subrange must contain three measured points\n", NULL);
 }
 
+static void test_create_eic_area_domain()
+{
+    const std::vector<float> times = {0, 1, 2, 3, 4};
+    std::vector<CentroidPeak> points(5);
+    Bin bin;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        points[i].number_MS1 = uint16_t(i);
+        points[i].mz = 100;
+        points[i].area = 0.125F;
+        bin.pointsInBin.push_back(&points[i]);
+    }
+    const EIC eic = bin.createEIC(&times);
+    verify(eic.ints_area.size() == points.size());
+    for (float area : eic.ints_area)
+        verify(area == 0.125F);
+    for (float invalidArea : {0.0F, -1.0F, std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::quiet_NaN()})
+    {
+        points[0].area = invalidArea;
+        bool rejected = false;
+        try
+        {
+            (void)bin.createEIC(&times);
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        verify(rejected);
+    }
+}
+
 int main(void)
 {
     test_create_eic_counts_measured_points();
+    test_create_eic_area_domain();
     return 0;
 }

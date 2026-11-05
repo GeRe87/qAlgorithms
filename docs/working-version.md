@@ -82,7 +82,55 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
-## Analytic inverse-beta precision and paired cascade experiment (latest continuation)
+## Statistical derivation and dimensionally valid area domain (latest continuation)
+
+The current mathematical audit is in [qpeaks-statistical-contract.md](qpeaks-statistical-contract.md).
+It separates the fixed-window Gaussian log-error reference from the actual
+selected/trimmed cascade. Independent projection-matrix checks show that the
+trimmed residual is not chi-square with m-4 degrees of freedom and the F
+numerator can have negative eigenvalues. A separate derivation shows why the
+data-selected curvature side is not a prespecified one-sided t test, even
+on a full fixed window. Four million independent coefficient/noise draws
+corroborate that isolated-gate result; they do not establish full-cascade or
+instrument error rates. An endpoint-slope intersection-union test is derived
+as a possible coherent reference using the existing inverse matrices, with its
+support-selection/model limitations stated. It is not adopted in production.
+
+A separate, unambiguous defect is corrected: acceptance no longer compares
+area (intensity times axis units) with the unitless number e. A fixed Gaussian
+was previously accepted on a seconds axis and discarded on the equivalent
+minutes axis. Acceptance now requires only a finite, strictly positive area;
+this is representability, not significance. The area formula, statistical
+thresholds, support calculation and equidistant regression remain unchanged.
+The EIC builder similarly accepts positive subunit centroid areas, and now
+rejects zero, negative, infinite or NaN areas with an explicit runtime error
+in Release and Debug. No existing test expectation or tolerance is weakened.
+New tests enforce count/coefficient invariance under axis-unit conversion,
+analytic Gaussian area/apex scaling, preservation of positive subunit areas,
+and explicit rejection of invalid areas.
+
+Release, standard Debug and assertion-enabled -Og Debug all retain 7/10 full
+CTest targets passing. Only test_qpeaks, test_qpeaks_pt03 and test_qpeaks_pt04
+fail with their original 0/3 expectations (actual 2/2). The numerical,
+reflection, binning and complete CLI integration regressions pass. The first
+Debug integration run exposed the downstream area>1 assumption; after its
+explicit domain correction those original CLI cases pass unchanged.
+
+A complete final-source Release run of the real measurement exits 0 in
+229.030 s. It accepts 579352 positive / 608539 negative centroids (1 / 7 more
+than 2a9e11b), with 7017 / 9490 EICs. Both complete feature lists and both
+maxima companions remain byte-identical to 2a9e11b: 19884 / 18640 descriptions,
+including 2736 / 1894 collectives. The unchanged timing audits are rebound and
+checked against every feature. No new whole-file Debug pipeline is claimed.
+
+The retained input segmentation at intensity>e is still an uncalibrated,
+numeric-unit-dependent restriction, not an instrument detection limit. The
+solitary-fit coverage heuristic and data-selected windows also remain outside
+an established statistical guarantee. This continuation does not claim the
+whole cascade is valid and does not change the error target to fit pt_03/04.
+RT interpolation and quantitative area corrections remain deferred.
+
+## Analytic inverse-beta precision and paired cascade experiment (preceding checkpoint)
 
 The remaining `test_utils` failure came from evaluating the inverse regularized
 beta function iteratively even for a parameter family with a closed form.

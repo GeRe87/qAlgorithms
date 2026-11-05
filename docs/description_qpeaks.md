@@ -195,6 +195,12 @@ x = \frac{\sum{c_i * y_i}}{\sum{c_i^2}} \\
 
 ### Stage 3: Plausibility Tests
 
+The current implemented stages, mathematical assumptions, identified
+selection/domain failures and a derived fixed-window reference are documented
+in [the statistical contract and audit](qpeaks-statistical-contract.md).
+The historical design notes below include tests that are not implemented and
+must not be read as a validation claim for the active cascade.
+
 @todo this section is outdated!
 
 The two types of tests employed here are those for logical contradictions, which always have 

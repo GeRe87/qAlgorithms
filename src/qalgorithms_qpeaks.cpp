@@ -1618,11 +1618,11 @@ namespace qAlgorithms
         mutateReg->area = (float)peakArea(coeffs, delta_x, mse_log, &uncertainty);
         mutateReg->area_unc = (float)uncertainty;
 
-        // Note: This is not a satistically reasoned limit, but rather the number e regardless of
-        // scaling. We introduce this limit here to prevent cases where the log operation introduces
-        // negative intensities
-        if (mutateReg->area <= minIntensity_global)
-            return invalid_height;
+        // Area has intensity * axis units. A fixed numeric cutoff here changes
+        // peak acceptance when the same axis is expressed in different units.
+        // This is only a representability check, not a statistical area test.
+        if (!std::isfinite(mutateReg->area) || mutateReg->area <= 0)
+            return invalid_area;
 
         // @todo cramer-von-mises test / modification of KS statistic instead. The property of interest
         // is correctness of the peak shape as a volume, not strictly the fitted curve
