@@ -82,7 +82,41 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
-## Statistical derivation and dimensionally valid area domain (latest continuation)
+## Pre-validation ensemble research path (latest continuation)
+
+The standalone [ensemble experiment](../experiments/qpeaks_ensemble/README.md)
+collects the existing moving regressions before significance filtering and
+preserves their full coefficients, including mathematically evaluable positive
+inputs below the production floor. It makes no new peak decision and changes
+no production source, default build, acceptance threshold or output contract.
+A diagnostic center/scale lattice and its contracted per-scale lineage retain
+all branches and merges rather than equating connected components with peaks.
+The lattice is an explicit exploratory design choice, not a proven same-peak
+relation. Its limitations and absence of any new persistence threshold are
+stated in the experiment documentation.
+
+A complete local study covers 5220 traces and 6502840 fitted windows, including
+the preceding paired controls, ten reflections, six previously captured real EICs and two
+additional deterministic controls. All windows for 28 trial-zero traces are
+exported (524349 rows); summaries and graph components cover every input.
+Release and assertion-enabled -Og Debug produce five byte-identical output
+CSVs. Six new structural collector tests pass in Release, standard Debug and
+-Og Debug; five independent Python structure/matrix tests pass.
+
+pt_04 has three distinct smallest-scale runs before the current local cascade;
+the last two join at scale 3. Overlapping peaks and noise likewise demonstrate
+why component count or scale persistence alone cannot establish peak count.
+An exactly constant trace produces 2301 formal maxima from numerical residual
+curvatures, all explicitly flagged as constant-log windows; this is exposed,
+not removed with a fitted tolerance. A common-Gaussian fixed-support reference
+also verifies the correlated-ensemble GLS identity with direct original-data
+OLS and quantifies the severe uncertainty understatement from treating fits
+as independent. No optimized general ensemble peak or calibrated ensemble
+acceptance rule is claimed. The prior full-file production results remain
+applicable because src/, include/, tests and CMake are unchanged in this
+research-only continuation; no new whole-file pipeline run is asserted.
+
+## Statistical derivation and dimensionally valid area domain (preceding checkpoint)
 
 The current mathematical audit is in [qpeaks-statistical-contract.md](qpeaks-statistical-contract.md).
 It separates the fixed-window Gaussian log-error reference from the actual
