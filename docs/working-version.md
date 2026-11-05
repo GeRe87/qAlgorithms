@@ -82,7 +82,41 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
-## Pre-validation ensemble research path (latest continuation)
+## Centered ensemble arithmetic and common-support fitting (latest continuation)
+
+The [second ensemble checkpoint](../experiments/qpeaks_ensemble/REFINEMENT.md)
+adds an optional centered native kernel and a common-support point estimator.
+Both remain experimental; production src/, include/, tests and CMake are
+unchanged. Existing inverse matrices and equidistant moment updates are
+retained. The native reference preserves float logs but centers them before
+double running sums, then restores the intercept. Exact constant data now
+produce zero curvatures and zero formal maxima without a near-zero threshold.
+One other weak noise window changes geometric classification; all such changes
+are recorded. Current-cascade annotations deliberately still use the old
+kernel and are not acceptance tests for centered coefficients.
+
+The same 5220 traces are collected in Release and -Og Debug with five
+byte-identical CSVs. Nine structural collector tests pass in Release,
+standard Debug and -Og Debug. An independent 28295-window arithmetic audit
+satisfies derived floating-point bounds; the maximum coefficient discrepancy
+against QR is about 4.05e-10. Raw apex reflection discrepancy in the ten
+controls decreases to about 7.11e-13 sample. The printed inverse table and
+statistical-law limitations are not repaired or recalibrated by centering.
+
+The shared reference fits original log observations once on a prespecified
+support, caches geometric QR operators, and searches all full-rank interior
+integer hinges of the four-coefficient piecewise-quadratic family. It reports
+the unconstrained global RSS winner and its geometry, not a peak acceptance.
+All 6425 cases are serialized and accounted for, including 2604 explicitly
+unsupported nonpositive full supports. Seven estimator tests and the preceding
+five analysis tests pass. In 300 specified asymmetric log-Gaussian controls,
+selected-hinge apex RMSE is about 0.04174 sample versus 0.02917 at the known
+fixed hinge. A correct smaller symmetric model wins on the symmetric control;
+a one-peak model is inadequate on overlapping signals and full pt_04.
+No selected-model confidence coverage, automatic support selection, multi-peak
+decision, area correction or new production peak count is claimed.
+
+## Pre-validation ensemble research path (preceding checkpoint)
 
 The standalone [ensemble experiment](../experiments/qpeaks_ensemble/README.md)
 collects the existing moving regressions before significance filtering and

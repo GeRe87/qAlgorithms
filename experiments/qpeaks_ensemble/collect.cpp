@@ -1,6 +1,7 @@
 // Exploratory collector: no production acceptance, grouping or output changes.
 // The source include exposes the exact existing moving-regression kernels.
 #include "../../src/qalgorithms_qpeaks.cpp"
+#include "centered_kernel.hpp"
 #include <fstream>
 #include <iostream>
 #include <iomanip>
@@ -71,7 +72,9 @@ std::set<std::pair<size_t,size_t>> currentAccepted(const Input& in){
 
 int main(int argc,char** argv){
  try{
-    if(argc!=3){std::cerr<<"Usage: collect INPUT.bin OUTPUT_DIRECTORY\n";return 2;}
+    if(argc!=3 && argc!=4){std::cerr<<"Usage: collect INPUT.bin OUTPUT_DIRECTORY [--centered]\n";return 2;}
+    const bool centered=argc==4;
+    if(centered && std::string(argv[3])!="--centered")throw std::invalid_argument("Unknown collector mode.");
     std::ifstream source(argv[1],std::ios::binary);
     if(!source)throw std::runtime_error("Cannot open input.");
     char magic[8];read(source,magic,8);
@@ -84,7 +87,7 @@ int main(int argc,char** argv){
     components<<"scenario,trial,component,nodes,scales,min_scale,max_scale,min_apex,max_apex\n";
     candidates<<"scenario,trial,id,block,center,scale,b0,b1,b2,b3,full_rss,has_interior_maximum,apex,constant_log_window,all_above_production_floor,current_accepted,component\n";
     edges<<"scenario,trial,from_id,to_id,axis\n";
-    observations<<"scenario,trial,index,x,y,cumulative_df\n";
+    observations<<"scenario,trial,index,x,y,cumulative_df,log_y_float\n";
     size_t records=0;
     while(source.peek()!=std::char_traits<char>::eof()){
         Input in;read(source,&in.scenario);read(source,&in.trial);read(source,&in.n);read(source,&in.t);
@@ -104,7 +107,9 @@ int main(int argc,char** argv){
             if(end-start>=MINLENGTH){
                 const size_t n=end-start;std::vector<float> z(n);
                 for(size_t i=0;i<n;++i)z[i]=std::log(in.y[start+i]);
-                std::vector<RegCoeffs> coeffs;findCoefficients(z.data(),n,&coeffs);
+                std::vector<RegCoeffs> coeffs;
+                if(centered)qpeaks_ensemble::findCenteredCoefficients(z.data(),n,&coeffs);
+                else findCoefficients(z.data(),n,&coeffs);
                 for(const auto& c:coeffs){
                     const size_t first=c.x0-c.scale,last=c.x0+c.scale;
                     double rss=0;bool constant=true,above=true;
@@ -141,12 +146,12 @@ int main(int argc,char** argv){
         summary<<in.scenario<<','<<in.trial<<','<<in.n<<','<<in.t<<','<<blocks<<','<<shortSamples<<','<<nonpositive<<','<<nodes.size()<<','<<maxima<<','<<constant<<','<<accepted.size()<<','<<groups.size()<<','<<edgeCount<<','<<count<<',';quote(summary,error);summary<<','<<detail<<'\n';
         if(detail){
             for(const auto& node:nodes){candidates<<in.scenario<<','<<in.trial<<','<<node.id<<','<<node.block<<','<<node.center<<','<<node.scale<<','<<node.c.b0<<','<<node.c.b1<<','<<node.c.b2<<','<<node.c.b3<<','<<node.rss<<','<<node.maximum<<',';if(node.maximum)candidates<<node.apex;candidates<<','<<node.constant<<','<<node.aboveFloor<<','<<node.currentAccepted<<',';if(node.maximum)candidates<<node.root;candidates<<'\n';}
-            for(size_t i=0;i<in.n;++i)observations<<in.scenario<<','<<in.trial<<','<<i<<','<<in.x[i]<<','<<in.y[i]<<','<<in.df[i]<<'\n';
+            for(size_t i=0;i<in.n;++i){observations<<in.scenario<<','<<in.trial<<','<<i<<','<<in.x[i]<<','<<in.y[i]<<','<<in.df[i]<<',';if(in.y[i]>0)observations<<std::log(in.y[i]);observations<<'\n';}
         }
         ++records;
     }
     for(auto* out:{&summary,&components,&candidates,&edges,&observations}){out->close();if(!*out)throw std::runtime_error("Output write failed.");}
-    std::cout<<"Complete records="<<records<<"; no ensemble peak decision was made.\n";
+    std::cout<<"Complete records="<<records<<"; kernel="<<(centered?"centered-reference":"production-kernel")<<"; no ensemble peak decision was made.\n";
     return 0;
  }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

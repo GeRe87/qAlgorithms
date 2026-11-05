@@ -4,6 +4,11 @@ This is an inspectable research path, **not a replacement peak detector**.
 Production source, statistical thresholds, collective-output policy, feature
 CSVs and default build are unchanged. No measurement data are committed here.
 
+The [second checkpoint](REFINEMENT.md) adds optional centered arithmetic and a
+shared-curve point estimator on prespecified supports. It does not yet make
+ensemble peak decisions. The original-kernel experiment below remains the
+first checkpoint; its default collection mode is retained.
+
 ## What is implemented
 
 `collect.cpp` includes the existing qPeaks implementation in a separate

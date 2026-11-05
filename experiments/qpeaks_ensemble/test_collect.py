@@ -30,6 +30,11 @@ class CollectorTests(unittest.TestCase):
         if p.returncode:raise AssertionError(p.stdout+p.stderr)
         cls.traces=table(cls.out,'traces.csv');cls.candidates=table(cls.out,'candidates.csv')
         cls.edges=table(cls.out,'edges.csv');cls.components=table(cls.out,'components.csv')
+        cls.centered_out=cls.root/'centered'
+        p=subprocess.run([str(EXE),str(cls.input),str(cls.centered_out),'--centered'],capture_output=True,text=True)
+        if p.returncode:raise AssertionError(p.stdout+p.stderr)
+        cls.centered=table(cls.centered_out,'candidates.csv')
+        cls.centered_traces=table(cls.centered_out,'traces.csv')
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -95,6 +100,31 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(all(math.isfinite(float(r[k])) for r in flat for k in ('b0','b1','b2','b3','full_rss')))
         # Do not assert that floating arithmetic produces zero stationary points.
         # Their presence is exactly the degeneracy this collector must expose.
+
+    def test_centered_constant_fit_is_exact_without_a_tolerance(self):
+        flat=[r for r in self.centered if r['scenario']=='4']
+        self.assertTrue(flat)
+        for r in flat:
+            self.assertEqual(r['constant_log_window'],'1')
+            self.assertEqual(r['has_interior_maximum'],'0')
+            for key in ('b1','b2','b3','full_rss'):self.assertEqual(float(r[key]),0)
+        row=next(r for r in self.centered_traces if r['scenario']=='4')
+        self.assertEqual(int(row['graph_components']),0)
+
+    def test_centered_mode_preserves_enumeration_and_legacy_comparison(self):
+        for a,b in zip(self.traces,self.centered_traces):
+            for key in ('scenario','trial','n','all_regressions','positive_blocks','short_positive_samples','nonpositive_samples','current_accepted_windows','strict_output_count','strict_error'):
+                self.assertEqual(a[key],b[key])
+        self.assertEqual(len(self.candidates),len(self.centered))
+
+    def test_centered_nonboundary_reflection_and_axis_units(self):
+        a={(int(r['center']),int(r['scale'])):r for r in self.centered if r['scenario']=='0'}
+        b={(20-int(r['center']),int(r['scale'])):r for r in self.centered if r['scenario']=='1'}
+        c={(int(r['center']),int(r['scale'])):r for r in self.centered if r['scenario']=='2'}
+        for key,x in a.items():
+            y=b[key];self.assertEqual(x['has_interior_maximum'],y['has_interior_maximum'])
+            if x['has_interior_maximum']=='1':self.assertLess(abs(float(x['apex'])+float(y['apex'])-20),1e-8)
+            self.assertEqual({k:v for k,v in x.items() if k!='scenario'},{k:v for k,v in c[key].items() if k!='scenario'})
 
     def test_truncation_and_nonfinite_inputs_fail_explicitly(self):
         bad=self.root/'truncated.bin';bad.write_bytes(self.input.read_bytes()[:-1])

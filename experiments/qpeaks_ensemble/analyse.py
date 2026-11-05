@@ -79,29 +79,29 @@ def lineage(arr,np):
     assert sum(r['members'] for r in result)==len(rows)
     return result,edges
 
-def run(folder,output,np,plots):
+def run(folder,output,np,plots,collection_name='release'):
     output.mkdir(parents=True,exist_ok=True)
     meta=json.loads((folder/'scenarios.json').read_text(encoding='utf-8'));records=read_inputs(folder/'inputs.bin')
     assert len(records)==meta['records']
     assert hashlib.sha256((folder/'inputs.bin').read_bytes()).hexdigest()==meta['input_sha256']
-    traces={(int(r['scenario']),int(r['trial'])):r for r in csvrows(folder/'release/traces.csv')}
+    traces={(int(r['scenario']),int(r['trial'])):r for r in csvrows(folder/collection_name/'traces.csv')}
     assert set(traces)==set(records)
     byscenario={s['id']:s for s in meta['scenarios']}
     arrays={k:np.empty((int(r['all_regressions']),12)) for k,r in traces.items() if r['detail']=='1'}
     positions=Counter()
-    for r in csvrows(folder/'release/candidates.csv'):
+    for r in csvrows(folder/collection_name/'candidates.csv'):
         key=(int(r['scenario']),int(r['trial']));i=int(r['id']);assert i==positions[key];positions[key]+=1
         arrays[key][i]=[int(r['center']),int(r['scale']),int(r['has_interior_maximum']),float(r['apex']) if r['apex'] else np.nan,int(r['constant_log_window']),int(r['current_accepted']),int(r['component']) if r['component'] else -1,float(r['full_rss']),float(r['b1']),float(r['b2']),float(r['b3']),int(r['all_above_production_floor'])]
     assert set(positions)<=set(arrays)
     group_sizes=defaultdict(Counter);group_ranges=defaultdict(dict);max_scales=defaultdict(int)
-    for r in csvrows(folder/'release/components.csv'):
+    for r in csvrows(folder/collection_name/'components.csv'):
         key=(int(r['scenario']),int(r['trial']));component=int(r['component'])
         assert component not in group_ranges[key]
         group_sizes[key][component]=int(r['nodes'])
         group_ranges[key][component]=(float(r['min_apex']),float(r['max_apex']))
         max_scales[key]=max(max_scales[key],int(r['scales']))
     edge_counts=Counter()
-    for r in csvrows(folder/'release/edges.csv'):
+    for r in csvrows(folder/collection_name/'edges.csv'):
         key=(int(r['scenario']),int(r['trial']));a,b=int(r['from_id']),int(r['to_id']);arr=arrays[key]
         assert arr[a,2]==arr[b,2]==1 and arr[a,6]==arr[b,6]
         dc,ds=arr[b,:2]-arr[a,:2]
@@ -204,9 +204,9 @@ def run(folder,output,np,plots):
     return report
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('folder',type=Path);parser.add_argument('output',type=Path);parser.add_argument('--numpy-root',type=Path);parser.add_argument('--no-plots',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('folder',type=Path);parser.add_argument('output',type=Path);parser.add_argument('--numpy-root',type=Path);parser.add_argument('--collection-name',default='release');parser.add_argument('--no-plots',action='store_true');args=parser.parse_args()
     if args.numpy_root:sys.path.insert(0,str(args.numpy_root.resolve()))
     import numpy as np
-    report=run(args.folder,args.output,np,not args.no_plots)
+    report=run(args.folder,args.output,np,not args.no_plots,args.collection_name)
     print(json.dumps(dict(records=report['records'],verified=True,references=report['correlated_ensemble_reference'],selected_scenarios=[s for s in report['scenarios'] if s['scenario'] in (0,1,2,3,4,5,6,7,8,9,3000,3001)]),indent=2))
 if __name__=='__main__':main()
