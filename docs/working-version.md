@@ -82,7 +82,42 @@ with all four previously failing targets and original expectations retained.
 That test-only checkpoint did not alter production output. The subsequent
 collective implementation below extends the output contract explicitly.
 
-## Centered ensemble arithmetic and common-support fitting (latest continuation)
+## One-versus-two additive component comparison (latest continuation)
+
+The [matched-family comparison](../experiments/qpeaks_ensemble/COMPARISON.md)
+fits one versus two concave piecewise-quadratic log profiles on identical
+prespecified supports. Component intensities add in the raw domain; global
+log-Gaussian error applies to their total. This is a declared reference
+subfamily, narrower than the preceding unrestricted single profile, with
+flat/log-linear boundary cases. It is not a production detector or a calibrated
+physical peak-count decision. Production sources, existing tests and CMake
+remain unchanged.
+
+The complete first study contains 109 comparisons: 105 explicitly selected
+source cases plus four generated controls. The ledger accounts for all 6425
+preceding cases. All 5156 start records are retained, including 82 budget-limited
+attempts. Best candidates converge or are analytically supplied; global
+nonlinear optimality is not certified. In 32 overlap controls, median RSS falls
+from about 10.0083 to 0.05160, with component-apex RMSE about 0.07559 sample.
+Single-peak controls also improve with two profiles. A single peak plus
+background gains strongly (6.843 to 0.4115), showing why two functions are not
+necessarily two physical peaks. Exact duplicate components have rank-four
+rather than rank-eight information. No nominal chi-square/F p-value is used.
+
+A separate complete discrete hinge grid covers 469 pairs in two examples,
+with 1838 candidate/refinement records and 14 unsuccessful pair-level attempts.
+The pt_04 comparison changes materially with hinge search; its expected three
+peaks are not validated by this one-versus-two study. Fourteen new analytic/
+structural tests, the seven preceding profile tests and five structure tests
+pass. An independent audit checks every finite objective, source binding,
+component/curve identity, all hinge pairs and 149 convex null fits by exhaustive
+active-set/SVD solutions. The maximum independent null RSS difference is about
+3.78e-15. Optional SciPy is used only in this Python reference work. No new
+whole-file mzML run, feature-list update, area correction or interpolation is
+claimed. Physical background/noise modelling and full-selection calibration
+remain open before changing production peak decisions.
+
+## Centered ensemble arithmetic and common-support fitting (preceding checkpoint)
 
 The [second ensemble checkpoint](../experiments/qpeaks_ensemble/REFINEMENT.md)
 adds an optional centered native kernel and a common-support point estimator.
