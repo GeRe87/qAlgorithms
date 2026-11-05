@@ -58,28 +58,94 @@ def basins(centers, slopes):
     return records,[terminal[i] for i in range(n)]
 
 
-def topology(candidates):
+def _model_boundary_basins(records,owners,rs,log_values,facts):
+    """Close center-grid exits using an already fitted, observed-window maximum.
+
+    No regression is refitted and no distance/significance tolerance is used.
+    A zero-slope basin touching both ends is not forced into a single maximum:
+    distinct endpoint anchors own only their actual endpoint centers.
+    """
+    centers=[int(r['center']) for r in rs];by_center={int(r['center']):r for r in rs}
+    changes,bad=facts;output=[];assigned={}
+    def anchor(center,side):
+        r=by_center[center];scale=int(r['scale']);lo=center-scale;hi=center+scale
+        if lo<0 or hi>=len(log_values) or bad[hi+1]!=bad[lo]:raise ValueError('Native window has missing log observations.')
+        if changes[hi+1]==changes[lo+1]:return None # Exact constant native logs carry no peak shape.
+        p=[float(r[k]) for k in ('b0','b1','b2','b3')]
+        left=p[1]-2*scale*p[2];right=p[1]+2*scale*p[3]
+        if not all(math.isfinite(v) for v in (*p,left,right)):raise ValueError('Nonfinite native model geometry.')
+        if not(left>0 and right<0):return None
+        peak=geometric_peak(p,scale,2*scale+1)
+        if peak['apex'] is None:raise AssertionError('Opposite endpoint slopes must enclose an interior maximum.')
+        apex=lo+peak['apex']
+        if (side=='left' and apex>centers[0]) or (side=='right' and apex<centers[-1]):return None
+        return dict(candidate_id=int(r['id']),center=center,apex=apex,side=side,data_support=(lo,hi),left_slope=left,right_slope=right)
+    for r in records:
+        positions=r['positions'];kind=r['kind'];anchors=[]
+        if kind=='left_boundary_exit':
+            a=anchor(centers[0],'left')
+            if a is not None:anchors.append(a)
+        elif kind=='right_boundary_exit':
+            a=anchor(centers[-1],'right')
+            if a is not None:anchors.append(a)
+        elif kind=='flat_or_boundary_stationary':
+            for center,side in ((centers[0],'left'),(centers[-1],'right')):
+                if center not in positions or any(a['center']==center for a in anchors):continue
+                a=anchor(center,side)
+                if a is not None:anchors.append(a)
+        if not anchors:
+            new=dict(r);output.append(new)
+            for c in positions:assigned[c]=len(output)-1
+        elif kind in ('left_boundary_exit','right_boundary_exit'):
+            a=anchors[0];new=dict(r,kind='boundary_model_maximum',source_kind=kind,root=(a['apex'],a['apex']),model_anchors=anchors);output.append(new)
+            for c in positions:assigned[c]=len(output)-1
+        else:
+            # Keep nonanchored stationary centers explicit instead of inventing
+            # a nearest-apex split or assigning uncertain centers to an endpoint.
+            endpoints={a['center'] for a in anchors};remaining=[c for c in positions if c not in endpoints]
+            if remaining:
+                output.append(dict(r,positions=remaining))
+                for c in remaining:assigned[c]=len(output)-1
+            for a in anchors:
+                output.append(dict(r,positions=[a['center']],kind='boundary_model_maximum',source_kind=kind,root=(a['apex'],a['apex']),model_anchors=[a]));assigned[a['center']]=len(output)-1
+    if set(assigned)!=set(centers):raise AssertionError('Boundary extension lost or duplicated a native center.')
+    return output,[assigned[c] for c in centers]
+
+
+def topology(candidates,*,model_boundaries=False,log_values=None,boundary_scope='all_edges'):
     """Every native fit belongs to one basin; retain every maximum DAG edge."""
-    grids=defaultdict(list)
-    for r in candidates:grids[(int(r['block']),int(r['scale']))].append(r)
+    if boundary_scope not in ('all_edges','singleton_blocks'):raise ValueError('Unknown boundary-model scope.')
+    facts=None
+    if model_boundaries:
+        if log_values is None:raise ValueError('Boundary models require the original native log observations.')
+        changes=[0];bad=[0]
+        for i,z in enumerate(log_values):
+            changes.append(changes[-1]+int(i>0 and z!=log_values[i-1]));bad.append(bad[-1]+int(not math.isfinite(z)))
+        facts=changes,bad
+    maximum_kinds={'maximum','boundary_model_maximum'}
+    grids=defaultdict(list);block_counts=defaultdict(int)
+    for r in candidates:
+        grids[(int(r['block']),int(r['scale']))].append(r);block_counts[int(r['block'])]+=1
     result=[];membership={};lookup={}
     for (block,scale),rs in sorted(grids.items()):
         rs=sorted(rs,key=lambda r:int(r['center']));centers=[int(r['center']) for r in rs]
-        records,owners=basins(centers,[float(r['b1']) for r in rs]);offset=len(result)
+        records,owners=basins(centers,[float(r['b1']) for r in rs])
+        if model_boundaries and (boundary_scope=='all_edges' or block_counts[block]==1):records,owners=_model_boundary_basins(records,owners,rs,log_values,facts)
+        offset=len(result)
         for i,r in enumerate(records):
             result.append(dict(r,id=offset+i,block=block,scale=scale,candidate_ids=[]))
         for r,owner in zip(rs,owners):
             ident=int(r['id'])
             if ident in membership:raise ValueError('Duplicate native fit ID.')
             owner+=offset;membership[ident]=owner;result[owner]['candidate_ids'].append(ident)
-            if result[owner]['kind']=='maximum':lookup[(block,scale,int(r['center']))]=owner
+            if result[owner]['kind'] in maximum_kinds:lookup[(block,scale,int(r['center']))]=owner
     edges=defaultdict(int)
     for (block,scale,center),owner in lookup.items():
         nxt=lookup.get((block,scale+1,center))
         if nxt is not None:edges[(owner,nxt)]+=1
     incoming=defaultdict(set);outgoing=defaultdict(set)
     for a,b in edges:outgoing[a].add(b);incoming[b].add(a)
-    parents={r['id']:r['id'] for r in result if r['kind']=='maximum'}
+    parents={r['id']:r['id'] for r in result if r['kind'] in maximum_kinds}
     def root(i):
         while parents[i]!=i:parents[i]=parents[parents[i]];i=parents[i]
         return i
@@ -97,6 +163,7 @@ def topology(candidates):
         g['native_fits']=sum(len(result[i]['candidate_ids']) for i in members)
         g['contains_merge']=any(len(incoming[i])>1 for i in members)
         g['contains_split']=any(len(outgoing[i])>1 for i in members)
+        if model_boundaries:g['boundary_model_nodes']=[i for i in g['basins'] if result[i]['kind']=='boundary_model_maximum']
     assert len(membership)==len(candidates)
     return result,dict(edges),groups,membership
 

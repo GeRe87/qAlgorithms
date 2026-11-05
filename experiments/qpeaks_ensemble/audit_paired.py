@@ -10,6 +10,9 @@ from real_comparison import read_eics
 
 def run(inputs,release,debug,comparison,old_collection,fresh,out,np):
     out.mkdir(parents=True,exist_ok=True)
+    comparison_report=json.loads((comparison/'report.json').read_text())
+    model_boundaries=comparison_report.get('topology_version','center_slope_v1')!='center_slope_v1'
+    boundary_scope='singleton_blocks' if comparison_report.get('topology_version')=='model_singleton_v3' else 'all_edges'
     assert (release/'fields.bin').read_bytes()==(debug/'fields.bin').read_bytes()
     for name in ('cascade-runs.csv','cascade-peaks.csv','field-timing.csv'):
         a=list(rows(release/name));b=list(rows(debug/name));assert len(a)==len(b)
@@ -53,7 +56,7 @@ def run(inputs,release,debug,comparison,old_collection,fresh,out,np):
         return U,float(s[0]/s[-1])
     checked=0;max_score_error=0.;max_curve_error=0.;old_verified=0;native_count=0;real_verified=[];fresh_eics=read_eics(fresh)
     for identity,z,candidates,intervals in fields(release/'fields.bin'):
-        meta=cases[identity];truth,x,y=source[identity];bs,edges,groups,membership=topology(candidates);by_id={r['id']:r for r in candidates}
+        meta=cases[identity];truth,x,y=source[identity];bs,edges,groups,membership=topology(candidates,model_boundaries=model_boundaries,log_values=z,boundary_scope=boundary_scope);by_id={r['id']:r for r in candidates}
         native_count+=len(candidates);assert len(candidates)==summaries[identity]['native_fits']
         if identity in oldhashes:
             digest=hashlib.sha256()
@@ -91,6 +94,7 @@ def run(inputs,release,debug,comparison,old_collection,fresh,out,np):
         print(f'audited={identity} groups={len(groups)} scores_total={checked}',flush=True)
     report=json.loads((comparison/'report.json').read_text());assert checked==report['hinge_scores'] and native_count==report['native_regressions_accounted']
     result=dict(native_field_policy=policy,debug_release_native_fields_identical=True,debug_release_all_cascade_outputs_identical_except_timing=True,cases=len(source),all_native_regressions=native_count,prior_native_detailed_fields_exactly_bound=old_verified,all_hinge_scores_independently_recomputed=checked,all_best_curves_independently_recomputed=sum(len(v) for v in fits.values()),max_hinge_rss_error=max_score_error,max_best_curve_log_error=max_curve_error,real_vectors_bound_to_fresh_mzml=real_verified,statistical_ensemble_peak_decision_validated=False)
+    result['topology_version']=comparison_report.get('topology_version','center_slope_v1')
     result['verified_hashes']={name:hashlib.sha256(path.read_bytes()).hexdigest() for name,path in [('inputs',inputs/'inputs.bin'),('fields',release/'fields.bin'),('hinge_scores',comparison/'hinge-scores.bin'),('bundle_fits',comparison/'bundle-fits.json'),('case_results',comparison/'case-results.json')]}
     (out/'audit.json').write_text(json.dumps(result,indent=2),encoding='utf-8');return result
 

@@ -4,6 +4,12 @@ This is an inspectable research path, **not a replacement peak detector**.
 Production source, statistical thresholds, collective-output policy, feature
 CSVs and default build are unchanged. No measurement data are committed here.
 
+The [singleton base-case correction](SINGLETON_METHOD.md) retains a valid
+one-model ensemble without changing any multi-model v1 bundle. A broader
+boundary extension is kept as an explicitly rejected experiment because it
+fragmented overlap hypotheses. The preferred scoped correction is checked on
+additional trials 64–95; noise control and general association remain open.
+
 The [two-stage bundle method](BUNDLE_METHOD.md) returns to native running
 regressions: a slope-basin scale graph defines bundles, then each selected
 bundle defines a common piecewise fit through cached geometry/prefix moments.

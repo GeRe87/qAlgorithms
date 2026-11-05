@@ -62,7 +62,8 @@ def match_positions(truth,predictions):
     pairs.reverse()
     return dict(pairs=pairs,errors=[p-t for t,p in pairs],unmatched_reference=len(truth)-m,unmatched_outputs=len(predictions)-m,squared_error=cost[m][n])
 
-def run(inputs,native,out,np):
+def run(inputs,native,out,np,topology_version='center_slope_v1'):
+    if topology_version not in ('center_slope_v1','model_boundary_v2','model_singleton_v3'):raise ValueError('Unknown topology version.')
     out.mkdir(parents=True,exist_ok=True)
     source=read_inputs(inputs/'inputs.bin');cases={(c['scenario'],c['trial']):c for c in json.loads((inputs/'cases.json').read_text())}
     assert set(source)==set(cases)
@@ -76,11 +77,12 @@ def run(inputs,native,out,np):
         assert identity not in seen;seen.add(identity);s,t=identity;c=cases[identity];truth,x,y=source[identity]
         assert len(z)==len(y) and len(candidates)==int(timings[identity]['regressions'])
         assert all(math.isfinite(v) if yy>0 else math.isnan(v) for yy,v in zip(y,z))
-        began=time.perf_counter();bs,edges,groups,membership=topology(candidates);by_id={int(r['id']):r for r in candidates}
+        began=time.perf_counter();bs,edges,groups,membership=topology(candidates,model_boundaries=topology_version!='center_slope_v1',log_values=z,boundary_scope='singleton_blocks' if topology_version=='model_singleton_v3' else 'all_edges');by_id={int(r['id']):r for r in candidates}
         assert len(membership)==len(candidates)
         proposals=[];errors=0;local_records=[]
         for g in groups:
             record=dict(scenario=s,trial=t,bundle=g['id'],native_fits=g['native_fits'],contains_merge=g['contains_merge'],contains_split=g['contains_split'],eligible_geometric_proposal=False,statistically_accepted=False)
+            if topology_version!='center_slope_v1':record['boundary_model_nodes']=len(g['boundary_model_nodes'])
             try:
                 left,right,hinges=bundle_support(g,bs,candidates,by_id);local=np.array(z[left:right+1]);fits,winners=geometry.fit(local,hinges)
                 for fit in fits:
@@ -131,14 +133,15 @@ def run(inputs,native,out,np):
     report=dict(cases=len(results),native_regressions_accounted=sum(r['native_fits'] for r in results),all_bundles_fitted=len(bundle_results),fit_errors=sum(r['fit_errors'] for r in results),hinge_scores=score_count,max_fast_rss_difference=max_fast_error,groups=grouped,ensemble_variant='Geometry-only all-bundle ablation; no statistical acceptance and no oracle selection.',proposal_rule='Unique numeric best hinge, strict interior local maximum, fitted height strictly above both fitted support edges. All such atomic-bundle proposals retained, including merge/split bundles flagged as junctions. These are analytic shape conditions, not calibrated significance.',ensemble_final_physical_peak_counts_defined=False,screening_event='At least one complete geometric proposal versus at least one native output description. Errors are third outcomes, never zero detections.',localization_metric='Minimum-distance one-to-one subset assignment with no tolerance. Unmatched counts remain explicit. It is not recall; junction fits and extra proposals can be mixtures/duplicates.',areas_compared=False,whole_real_file_feature_lists_regenerated=False,timing_interpretation='Native cascade executes optimized C++; ensemble uses the same native kernel plus unoptimized Python graph/fit reference and score logging. Cold/warm cache depends on fixed case order. No algorithmic speed winner can be inferred.',inputs_sha256=hashlib.sha256((inputs/'inputs.bin').read_bytes()).hexdigest(),native_fields_sha256=hashlib.sha256((native/'fields.bin').read_bytes()).hexdigest())
     report['native_field_policy']=json.loads((native/'field-policy.json').read_text())
     report['geometry_cache_entries']=len(geometry.cache)
+    report['topology_version']=topology_version
     (out/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     return report
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for k in ('inputs','native','output'):p.add_argument(k,type=Path)
-    p.add_argument('--numpy-root',type=Path);a=p.parse_args()
+    p.add_argument('--numpy-root',type=Path);p.add_argument('--topology',choices=('center_slope_v1','model_boundary_v2','model_singleton_v3'),default='center_slope_v1');a=p.parse_args()
     if a.numpy_root:sys.path.insert(0,str(a.numpy_root.resolve()))
     import numpy as np
-    r=run(a.inputs,a.native,a.output,np);print(json.dumps({k:v for k,v in r.items() if k!='groups'},indent=2))
+    r=run(a.inputs,a.native,a.output,np,a.topology);print(json.dumps({k:v for k,v in r.items() if k!='groups'},indent=2))
     if r['fit_errors']:raise SystemExit(1)
