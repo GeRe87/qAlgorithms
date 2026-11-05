@@ -4,6 +4,12 @@ This is an inspectable research path, **not a replacement peak detector**.
 Production source, statistical thresholds, collective-output policy, feature
 CSVs and default build are unchanged. No measurement data are committed here.
 
+The [two-stage bundle method](BUNDLE_METHOD.md) returns to native running
+regressions: a slope-basin scale graph defines bundles, then each selected
+bundle defines a common piecewise fit through cached geometry/prefix moments.
+It bypasses the old local cascade for grouping, retains every native fit and
+every junction, and remains an uncalibrated research proposal.
+
 The [one-versus-two comparison](COMPARISON.md) adds matched component-family
 fits, complete start accounting and hinge sensitivity. It makes no peak-count
 release decision.
