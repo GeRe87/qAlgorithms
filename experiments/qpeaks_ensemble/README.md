@@ -10,6 +10,12 @@ bundle defines a common piecewise fit through cached geometry/prefix moments.
 It bypasses the old local cascade for grouping, retains every native fit and
 every junction, and remains an uncalibrated research proposal.
 
+The [paired cascade comparison](PAIRED_COMPARISON.md) fits all bundles in a
+frozen 280-input pilot, including a domain matched to the existing cascade
+floor. It finds conditional localization gains, many noise proposals and a
+specific missed-single-center limitation. It does not establish a replacement
+detector or reinterpret proposals as statistically confirmed physical peaks.
+
 The [one-versus-two comparison](COMPARISON.md) adds matched component-family
 fits, complete start accounting and hinge sensitivity. It makes no peak-count
 release decision.

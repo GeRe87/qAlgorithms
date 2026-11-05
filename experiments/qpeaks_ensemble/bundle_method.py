@@ -141,10 +141,10 @@ class MomentGeometry:
         return records,winners
 
 
-def bundle_support(group,basin_rows,candidates):
+def bundle_support(group,basin_rows,candidates,candidate_by_id=None):
     """Support union and hinge proposals come from the native ensemble itself."""
     ids={i for b in group['basins'] for i in basin_rows[b]['candidate_ids']}
-    rs=[r for r in candidates if int(r['id']) in ids]
+    rs=([candidate_by_id[i] for i in ids] if candidate_by_id is not None else [r for r in candidates if int(r['id']) in ids])
     intervals=sorted((int(r['center'])-int(r['scale']),int(r['center'])+int(r['scale'])) for r in rs)
     left,right=intervals[0]
     for lo,hi in intervals[1:]:
