@@ -71,3 +71,38 @@ python experiments/qpeaks_ensemble/test_profile_ensemble.py
 
 NumPy and SciPy are required. No production code is used for the added
 profile evaluation, and production detector behavior is unchanged.
+
+## Apex corridor and valley audit
+
+The audit replays the profile outputs against the exact same field bank.
+Every maximum is classified by whether its apex belongs to a native root
+corridor of its own branch, of another branch on the same positive block,
+between its own corridors, or outside all corridors. The test uses closed
+corridor bounds without a distance tolerance. A root corridor is a geometric
+construct and can move under noise or differ from the ensemble apex.
+
+Of 17,694 maxima in the fixed real diagnostics, 4,515 lie in their own
+branch's corridors and 12,841 in another branch's corridor. In the
+64-EIC stratified sample the corresponding counts are 2,081 and 4,174
+out of 6,521 maxima. No real branch has more than one maximum in its own
+corridors. A hypothetical hard own-corridor rule gives the expected count
+in 29/32 narrow cases, 29/32 triples and 7/32 overlap cases, compared
+with 32/32, 32/32 and 1/32 before restriction. It retains 78 maxima
+for pt_03 and three for pt_04. It is an attribution diagnostic only.
+
+The valley diagnostic measures both log-height drops to the shared sampled
+separator between adjacent maxima of a single branch. The analytic standard
+error under known iid log noise is computed from the difference between the
+apex and separator influence vectors on the same original scans. The
+selected locations and membership are held fixed for propagation. In 64
+trials per separation, both drops exceed 1.96 conditional standard errors
+in 0, 0, 1 and 56 cases at separations of 0, 4, 6 and 9 scans for equal
+Gaussians of width 2.5 scans. The first two true profiles are unimodal and
+the last two bimodal. The pointwise contrast is exploratory after searching
+for peaks and separators. This audit does not measure a valley between
+different branches, and no noise standard errors are assigned to real EICs.
+
+```text
+python experiments/qpeaks_ensemble/audit_profile_corridors.py NATIVE PROFILE AUDIT
+python experiments/qpeaks_ensemble/study_valley_contrasts.py VALLEY.json
+```
