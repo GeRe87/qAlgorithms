@@ -170,3 +170,32 @@ python experiments/qpeaks_ensemble/audit_model_boundaries.py NEW_NATIVE STRUCTUR
 Native exporter code and build instructions are in [PAIRED_COMPARISON.md](PAIRED_COMPARISON.md).
 The default topology remains v1 for reproducible comparisons. V2 and v3 are
 explicit opt-in research variants; none changes the production detector.
+
+## Reuse a native regression
+
+The optional `--estimator native-representative` keeps the v3 grouping
+and chooses one existing native regression per bundle. It ranks candidates by
+log RSS on the same observed points, the union of their native windows. This
+can extrapolate during ranking. The output records how many points were
+outside the winner's native window, and the apex and edge checks use only
+that window. An exact score tie remains an explicit ambiguous outcome.
+The batched scorer evaluates polynomials directly. It creates no inverse
+matrix and solves no additional regression.
+
+On the 280 validation cases this evaluates 28,207 bundles, with 8,340
+geometric proposals and no scoring errors. Of the winning models, 28,169
+were scored outside their native window. An independent scalar sum of the
+squared residuals agreed on all selected candidate IDs and outcomes.
+Debug and Release banks produce the same results apart from timings.
+The original refit outputs reproduce byte-for-byte.
+
+On the same 16 wide-peak cases with one nonjunction proposal from both
+ensemble variants, apex RMSE in scans is 0.06977 for native reuse, 0.05850
+for the refit and 0.24947 for the strict cascade. All three methods agree
+at 0.04308 scans on the 32 narrow cases. Exactly three proposals occur
+in 26/32 triple cases with native reuse and in 32/32 with refit and
+cascade. Exactly two occur in 14/32 overlap cases with native reuse,
+17/32 with refit and 32/32 with cascade. These counts do not establish
+correct component separation. The ten real EICs have no reference peak
+labels. This remains an experimental proposal generator without statistical
+acceptance or quantitative areas.
