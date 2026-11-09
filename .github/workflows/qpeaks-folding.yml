@@ -41,6 +41,13 @@ jobs:
           mkdir -p /tmp/qtof_folding
           ./build/qAlgorithms -i /tmp/pool_qtof.mzML -o /tmp/qtof_folding --peak-folding --folding-axis tof --folding-model asymmetric --folding-max-scans 10
           python3 -c 'import csv; from pathlib import Path; p=Path("/tmp/qtof_folding/pool_qtof_folding.csv"); rows=list(csv.DictReader(p.open())); assert rows, "QTOF folding yielded no grouped profiles"; print("REAL QTOF", len(rows), "profiles,", sum(r["validApex"]=="1" for r in rows), "valid apex estimates")'
+      - name: Upload public TripleTOF folding CSV (research preview)
+        if: matrix.configuration == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qtof-folding-real-preview
+          path: /tmp/qtof_folding/*_folding.csv
+          if-no-files-found: ignore
       - name: Run whole suite (known legacy failures are non-gating)
         continue-on-error: true
         run: ctest --test-dir build --output-on-failure
