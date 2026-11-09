@@ -6,6 +6,11 @@ on:
       - "src/qalgorithms_qpeaks.cpp"
       - "include/qalgorithms_qpeaks.h"
       - "test/test_qpeaks_folding.cpp"
+      - "src/qalgorithms_main.cpp"
+      - "src/qalgorithms_input_output.cpp"
+      - "include/qalgorithms_input_output.h"
+      - "test/integration/test_folding_cli.py"
+      - "CMakeLists.txt"
       - ".github/workflows/qpeaks-folding.yml"
   workflow_dispatch:
 
@@ -26,7 +31,23 @@ jobs:
       - name: Build
         run: cmake --build build --parallel 2
       - name: Verify folding and previous multi-trace regressions
-        run: ctest --test-dir build --output-on-failure -R "^test_qpeaks_(folding|multitrace)$"
+        run: ctest --test-dir build --output-on-failure -R "^test_(folding_cli|qpeaks_(folding|multitrace))$"
+      - name: Optional public TripleTOF real-data pilot (non-gating)
+        if: matrix.configuration == 'Release'
+        continue-on-error: true
+        run: |
+          curl --fail --location --retry 3 --connect-timeout 10 --max-time 120 --output /tmp/pool_qtof.mzML 'https://zenodo.org/records/20729183/files/20171016_POOL_POS_1_105-134.mzML?download=1'
+          echo '4130309a9283c8b492660dbad1fd3670  /tmp/pool_qtof.mzML' | md5sum --check
+          mkdir -p /tmp/qtof_folding
+          ./build/qAlgorithms -i /tmp/pool_qtof.mzML -o /tmp/qtof_folding --peak-folding --folding-axis tof --folding-model asymmetric --folding-max-scans 10
+          python3 -c 'import csv; from pathlib import Path; p=Path("/tmp/qtof_folding/pool_qtof_folding.csv"); rows=list(csv.DictReader(p.open())); assert rows, "QTOF folding yielded no grouped profiles"; print("REAL QTOF", len(rows), "profiles,", sum(r["validApex"]=="1" for r in rows), "valid apex estimates")'
+      - name: Upload public TripleTOF folding CSV (research preview)
+        if: matrix.configuration == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qtof-folding-real-preview
+          path: /tmp/qtof_folding/*_folding.csv
+          if-no-files-found: ignore
       - name: Run whole suite (known legacy failures are non-gating)
         continue-on-error: true
         run: ctest --test-dir build --output-on-failure

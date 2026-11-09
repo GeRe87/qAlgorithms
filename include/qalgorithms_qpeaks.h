@@ -205,6 +205,46 @@ namespace qAlgorithms
         const std::vector<FoldingProfileView> &profiles,
         FoldingCurvatureMode mode = FoldingCurvatureMode::asymmetric);
 
+    // Experimental, scan-local folding of raw mzML profile spectra.
+    // The mzML reader supplies raw m/z and intensity arrays; this routine
+    // conservatively selects candidate isolated peaks, folds their measured
+    // local coordinates, and calls fitPeakFoldingLinear. It is not qCentroids
+    // and must not be used as a validated feature list.
+    enum class FoldingSamplingAxis : uint8_t
+    {
+        tofSqrtMz,        // u proportional to sqrt(m/z)
+        orbitrapInvSqrtMz // u proportional to -1/sqrt(m/z)
+    };
+
+    struct FoldingSpectrumPeak
+    {
+        size_t anchorIndex = 0, pointCount = 0;
+        double anchorMz = 0, anchorIntensity = 0;
+        double apexMz = 0, apexUncertaintyMz = 0;
+        bool validApex = false;
+        FoldingPeakEstimate coefficients;
+    };
+
+    struct FoldingSpectrumFit
+    {
+        bool fitted = false; // false => no valid grouped model (no fake peaks)
+        size_t observedMaxima = 0, selectedCandidates = 0;
+        double samplingStep = 0;
+        FoldingLinearFit fit;
+        std::vector<FoldingSpectrumPeak> peaks;
+    };
+
+    // The candidate detector uses a small uninterrupted region around each
+    // local maximum, requires both sides and rejects nearby shoulders.
+    // Sampling step is estimated from the observed mz array (no filling or
+    // interpolation). Results with fewer than two candidate peaks have
+    // fitted=false. On malformed unsorted mz data a domain_error is raised.
+    FoldingSpectrumFit foldSpectrumProfiles(
+        const float *mz, const float *intensity, size_t length,
+        FoldingSamplingAxis axis,
+        FoldingCurvatureMode mode = FoldingCurvatureMode::asymmetric,
+        double minimumApexIntensity = 100.0);
+
     // mutate b0 so that it is optimal for the exponential case if b1, b2 and b3 are identical
 
     enum invalid // NOLINT @todo rework causes for invalidation

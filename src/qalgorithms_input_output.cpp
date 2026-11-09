@@ -9,6 +9,7 @@
 #include <filesystem> // printing absolute path in case read fails
 #include <fstream>    // write peaks to file @todo remove
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,15 @@ namespace qAlgorithms
         "                                   all binned centroids will be printed to the output location\n"
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
+        "      --peak-folding              : Experimental scan-wise folding of isolated MS1 profile peaks.\n"
+        "                                    Outputs <input>_folding.csv, NOT a validated feature list.\n"
+        "      --folding-axis <tof|orbitrap>: Required with --peak-folding. TOF uses sqrt(m/z);\n"
+        "                                    Orbitrap uses -1/sqrt(m/z). Do not mix instrument types.\n"
+        "      --folding-model <asymmetric|symmetric>: Shared left/right or one common curvature.\n"
+        "                                    Default: asymmetric.\n"
+        "      --folding-min-intensity <N>: Minimum raw intensity for candidate maxima (default 100).\n"
+        "      --folding-max-scans <N>     : Process at most N MS1 profile scans per polarity\n"
+        "                                    (default: all). This is a research screening mode.\n"
         //   "      -sp, --subprofile:           (@todo) instead of the peaks, print all proflie-mode data points which\n"
         //   "                                   were used to create the final peaks. This does not return any quality\n"
         //   "                                   scores. Only use this option when reading in prodile mode files.\n"
@@ -220,6 +230,57 @@ namespace qAlgorithms
             {
                 args.printFeatures = true;
             }
+            else if (argument == "--peak-folding")
+            {
+                args.peakFolding = true;
+            }
+            else if (argument == "--folding-axis")
+            {
+                args.foldingOptionSpecified = true;
+                if (++i == argc)
+                    throw std::invalid_argument("--folding-axis requires tof or orbitrap");
+                const std::string value = argv[i];
+                if (value == "tof") args.foldingAxis = FoldingCliAxis::tof;
+                else if (value == "orbitrap") args.foldingAxis = FoldingCliAxis::orbitrap;
+                else throw std::invalid_argument("--folding-axis must be tof or orbitrap");
+            }
+            else if (argument == "--folding-model")
+            {
+                args.foldingOptionSpecified = true;
+                if (++i == argc)
+                    throw std::invalid_argument("--folding-model requires symmetric or asymmetric");
+                const std::string value = argv[i];
+                if (value == "symmetric") args.foldingSymmetric = true;
+                else if (value == "asymmetric") args.foldingSymmetric = false;
+                else throw std::invalid_argument("--folding-model must be symmetric or asymmetric");
+            }
+            else if (argument == "--folding-min-intensity")
+            {
+                args.foldingOptionSpecified = true;
+                if (++i == argc)
+                    throw std::invalid_argument("--folding-min-intensity requires a positive number");
+                size_t parsed = 0;
+                const std::string value = argv[i];
+                args.foldingMinIntensity = std::stod(value, &parsed);
+                if (parsed != value.size() || !std::isfinite(args.foldingMinIntensity) ||
+                    !(args.foldingMinIntensity > 0.0))
+                    throw std::invalid_argument("--folding-min-intensity requires a finite positive number");
+            }
+            else if (argument == "--folding-max-scans")
+            {
+                args.foldingOptionSpecified = true;
+                if (++i == argc)
+                    throw std::invalid_argument("--folding-max-scans requires a positive integer");
+                size_t parsed = 0;
+                const std::string value = argv[i];
+                if (value.empty() || value[0] == '-')
+                    throw std::invalid_argument("--folding-max-scans requires a positive integer");
+                const unsigned long long count = std::stoull(value, &parsed);
+                if (parsed != value.size() || count == 0 ||
+                    count > std::numeric_limits<size_t>::max())
+                    throw std::invalid_argument("--folding-max-scans requires a positive integer");
+                args.foldingMaxScans = static_cast<size_t>(count);
+            }
             else if ((argument == "-sp") || (argument == "--subprofile"))
             {
                 args.printSubProfile = true;
@@ -337,7 +398,8 @@ namespace qAlgorithms
         }
         if (!args.outputPath.empty() && !args.printCentroids && !args.printBins &&
             !args.printFeatures && !args.printProfileSection && !args.printCentroidsMZML &&
-            !args.printComponentRegs && !args.printComponentBins && !args.printFeatCens && !args.printSubProfile)
+            !args.printComponentRegs && !args.printComponentBins && !args.printFeatCens && !args.printSubProfile &&
+            !args.peakFolding)
             args.printFeatures = true;
         if (args.outputPath.empty())
         {
@@ -420,6 +482,32 @@ namespace qAlgorithms
             (void)fprintf(stderr, "Error: the output location must be a directory.\n");
             goodInputs = false;
         }
+        if (args.peakFolding)
+        {
+            if (args.outputPath.empty())
+            {
+                (void)fprintf(stderr, "Error: --peak-folding requires an output directory (-o).\n");
+                goodInputs = false;
+            }
+            if (args.foldingAxis == FoldingCliAxis::unspecified)
+            {
+                (void)fprintf(stderr, "Error: --peak-folding requires --folding-axis tof or orbitrap.\n");
+                goodInputs = false;
+            }
+            if (args.printCentroids || args.printCentroidsMZML || args.printBins ||
+                args.printFeatures || args.printProfileSection || args.printSubProfile ||
+                args.printFeatCens || args.printComponentRegs || args.printComponentBins)
+            {
+                (void)fprintf(stderr, "Error: --peak-folding cannot be combined with standard qPeaks output options.\n");
+                goodInputs = false;
+            }
+        }
+        else if (args.foldingOptionSpecified)
+        {
+            (void)fprintf(stderr, "Error: folding-specific options require --peak-folding.\n");
+            goodInputs = false;
+        }
+
         if (args.silent && args.verboseProgress)
         {
             (void)fprintf(stderr, "Warning: -verbose overrides -silent.\n");
@@ -466,7 +554,7 @@ namespace qAlgorithms
             goodInputs = false;
         }
 
-        if (args.term == TerminateAfter::never && !args.outputPath.empty())
+        if (args.term == TerminateAfter::never && !args.outputPath.empty() && !args.peakFolding)
         {
             (void)fprintf(stderr, "Warning: no output files will be written.\n");
         }

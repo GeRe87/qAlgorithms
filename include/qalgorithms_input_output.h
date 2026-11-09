@@ -29,6 +29,13 @@ namespace qAlgorithms
         never_override,
     };
 
+    enum class FoldingCliAxis : uint8_t
+    {
+        unspecified,
+        tof,
+        orbitrap
+    };
+
     struct UserInputSettings
     {
         // user input for input and output
@@ -52,6 +59,14 @@ namespace qAlgorithms
         bool printComponentRegs = false;
         bool printComponentBins = false;
         bool printProfileSection = false;
+        // Experimental native-profile folding; never enabled implicitly.
+        bool peakFolding = false;
+        bool foldingSymmetric = false;
+        bool foldingOptionSpecified = false;
+        FoldingCliAxis foldingAxis = FoldingCliAxis::unspecified;
+        double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
+        size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
+
         // progress reporting
         bool silent = false;
         bool verboseProgress = false;
