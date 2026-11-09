@@ -157,6 +157,21 @@ def run_cases(executable: Path, root: Path) -> None:
         fixtures.require(not list(incompatible.glob("*_folding.csv")),
                          "Incompatible flags created a misleading output")
 
+        # A folding-related option without --peak-folding must not be
+        # silently ignored in favour of the standard feature workflow.
+        standalone = root / "standalone"
+        standalone.mkdir()
+        for flag, value in (("--folding-model", "asymmetric"),
+                            ("--folding-min-intensity", "100"),
+                            ("--folding-axis", "tof")):
+            process = fixtures.run_command(executable, [
+                "-i", str(positive), "-o", str(standalone), flag, value
+            ], root, expect_success=False, log_prefix="standalone-" + flag[2:] + "-")
+            fixtures.require("--peak-folding" in process.stderr,
+                             "Unused folding-specific option was not rejected")
+        fixtures.require(not list(standalone.iterdir()),
+                         "Standalone folding option unexpectedly created outputs")
+
         centroid = root / "centroid profile.mzML"
         fixtures.write_fixture(centroid, centroided=True)
         cent_output = root / "centroid"
