@@ -83,8 +83,9 @@ residual MSE to obtain the conditional variances/covariances. There are
 N-(2m+q) residual degrees of freedom, where N is the total number of
 supplied observations and q is 1 (symmetric) or 2 (asymmetric).
 
-For a concave side with a fitted apex lying inside the observed local
-coordinate range, x_apex=-d_j/(2*q_side). Its conditional standard
+Only when BOTH fitted half-curvatures are negative and the apex lies
+inside the observed local coordinate range do we report an isolated
+unimodal apex, x_apex=-d_j/(2*q_side). Its conditional standard
 error uses the delta method and the **full covariance including
 Cov(d_j,q_side)**:
 
