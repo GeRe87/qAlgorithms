@@ -9,6 +9,10 @@
 #include <cctype>
 #include <ctime>
 #include <exception>
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <filesystem>
 #include <set>
 #include <stdexcept>
@@ -24,6 +28,137 @@ static std::string outputKey(std::string name)
         c = (char)std::tolower((unsigned char)c);
 #endif
     return name;
+}
+
+// Research output only: one grouped linear fit per MS1 profile spectrum.
+// Does not modify the existing centroid/bin/feature processing path.
+static void processFoldingSpectra(
+    const XML_File &inputFile, const std::vector<uint32_t> &selectedIndices,
+    const std::vector<float> &retentionTimes,
+    const std::filesystem::path &outputDirectory, const std::string &filename,
+    const UserInputSettings &args)
+{
+    const auto output = outputDirectory / (filename + "_folding.csv");
+    if (std::filesystem::exists(output) && args.noOverwrite)
+    {
+        if (!args.silent)
+            printf("    Folding output exists, leaving unchanged: %s\n",
+                   output.string().c_str());
+        return;
+    }
+
+    const auto temp = std::filesystem::path(output.string() + ".partial");
+    // Never overwrite another process's unfinished work or any existing
+    // user-provided .partial file.
+    if (std::filesystem::exists(temp))
+        throw std::runtime_error("Folding partial output already exists: " + temp.string());
+
+    std::ofstream stream(temp);
+    if (!stream.is_open())
+        throw std::runtime_error("Could not open temporary folding CSV: " + temp.string());
+
+    const FoldingSamplingAxis axis = args.foldingAxis == FoldingCliAxis::tof
+        ? FoldingSamplingAxis::tofSqrtMz : FoldingSamplingAxis::orbitrapInvSqrtMz;
+    const FoldingCurvatureMode mode = args.foldingSymmetric
+        ? FoldingCurvatureMode::symmetric : FoldingCurvatureMode::asymmetric;
+    const char *const axisName = axis == FoldingSamplingAxis::tofSqrtMz
+        ? "tof" : "orbitrap";
+    const char *const modeName = mode == FoldingCurvatureMode::symmetric
+        ? "symmetric" : "asymmetric";
+    const char *const polarityName = inputFile.polarityMode == Polarities::mixed
+        ? (spectrum_polarity(&inputFile, selectedIndices.front()) == Polarities::positive
+                ? "positive" : "negative")
+        : (inputFile.polarityMode == Polarities::positive ? "positive" : "negative");
+
+    size_t fittedScans = 0, fittedPeaks = 0, rejectedCandidates = 0;
+    std::vector<float> mz, intensities;
+    stream << "spectrumIndex,retentionTimeSeconds,polarity,axis,model,"
+              "samplingStep,profilesInFit,anchorIndex,anchorMz,anchorIntensity,"
+              "samplesUsed,validApex,apexMz,apexUncertaintyMz,"
+              "b0,b1,b2,b3,b0StandardError,b1StandardError,"
+              "b2StandardError,b3StandardError,logRSS,pooledLogMSE,degreesOfFreedom\n";
+    stream << std::setprecision(14);
+
+    try
+    {
+        for (size_t i = 0; i < selectedIndices.size(); ++i)
+        {
+            if (get_spectrum(&inputFile, &mz, &intensities, selectedIndices[i]) != 0)
+                throw std::runtime_error("Could not decode MS1 profile spectrum " +
+                                         std::to_string(selectedIndices[i]));
+            if (mz.size() != intensities.size())
+                throw std::runtime_error("m/z and intensity arrays have different lengths");
+
+            FoldingSpectrumFit folding;
+            try
+            {
+                folding = foldSpectrumProfiles(mz.data(), intensities.data(),
+                                               mz.size(), axis, mode,
+                                               args.foldingMinIntensity);
+            }
+            catch (const std::exception &error)
+            {
+                throw std::runtime_error("Folding spectrum index " +
+                    std::to_string(selectedIndices[i]) + ": " + error.what());
+            }
+            rejectedCandidates += folding.observedMaxima - folding.selectedCandidates;
+            if (!folding.fitted) continue;
+            ++fittedScans;
+            const auto &fit = folding.fit;
+            const double commonSE2 = std::sqrt(std::max(0.0,
+                fit.curvatureCovarianceFactor[0] * fit.mse));
+            const double commonSE3 = std::sqrt(std::max(0.0,
+                fit.curvatureCovarianceFactor[3] * fit.mse));
+            for (const FoldingSpectrumPeak &peak : folding.peaks)
+            {
+                const auto &b = peak.coefficients;
+                stream << selectedIndices[i] << ',' << retentionTimes[i] << ','
+                       << polarityName << ',' << axisName << ',' << modeName << ','
+                       << folding.samplingStep << ',' << folding.peaks.size() << ','
+                       << peak.anchorIndex << ',' << peak.anchorMz << ','
+                       << peak.anchorIntensity << ',' << peak.pointCount << ','
+                       << (peak.validApex ? 1 : 0) << ',';
+                if (peak.validApex)
+                    stream << peak.apexMz << ',' << peak.apexUncertaintyMz;
+                else
+                    stream << ',';
+                stream << ',' << b.b0 << ',' << b.b1 << ','
+                       << fit.b2 << ',' << fit.b3 << ','
+                       << std::sqrt(std::max(0.0, b.varianceB0Factor * fit.mse)) << ','
+                       << std::sqrt(std::max(0.0, b.varianceB1Factor * fit.mse)) << ','
+                       << commonSE2 << ',' << commonSE3 << ','
+                       << b.residualSumSquares << ',' << fit.mse << ','
+                       << fit.degreesOfFreedom << '\n';
+                ++fittedPeaks;
+            }
+        }
+
+        stream.close();
+        if (!stream)
+            throw std::runtime_error("Could not complete folding output CSV");
+
+        // Write the complete output before replacing an existing CSV. This
+        // avoids publishing a partially analyzed file on decoding failure.
+        if (std::filesystem::exists(output))
+            std::filesystem::remove(output);
+        std::filesystem::rename(temp, output);
+    }
+    catch (...)
+    {
+        stream.close();
+        std::error_code ec;
+        std::filesystem::remove(temp, ec);
+        throw;
+    }
+
+    if (!args.silent)
+        printf("    Experimental folding: %zu peaks in %zu of %zu MS1 scans "
+               "(%zu candidates rejected); output: %s\n",
+               fittedPeaks, fittedScans, selectedIndices.size(),
+               rejectedCandidates, output.string().c_str());
+    if (fittedScans == 0)
+        (void)fprintf(stderr, "Warning: no eligible grouped profiles in %s. "
+                              "Folding CSV contains only its header.\n", filename.c_str());
 }
 
 static void processFile(const std::filesystem::path &pathSource, const UserInputSettings &args,
@@ -46,9 +181,12 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
     size_t processedPolarities = 0;
     for (const Polarities polarity : polarities)
     {
-        const std::vector<uint32_t> selectedIndices = filter_spectra(&inputFile, true, polarity, true);
+        std::vector<uint32_t> selectedIndices = filter_spectra(&inputFile, true, polarity, true);
         if (selectedIndices.empty())
             continue;
+        if (args.peakFolding && args.foldingMaxScans != 0 &&
+            selectedIndices.size() > args.foldingMaxScans)
+            selectedIndices.resize(args.foldingMaxScans);
 
         std::string filename = pathSource.stem().string();
         if (inputFile.polarityMode == Polarities::mixed)
@@ -63,6 +201,14 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         get_spectra_RT(&inputFile, &selectedIndices, &retentionTimes);
         if (retentionTimes.size() != selectedIndices.size())
             throw std::runtime_error("Could not read retention times for the selected spectra.");
+
+        if (args.peakFolding)
+        {
+            processFoldingSpectra(inputFile, selectedIndices, retentionTimes,
+                                  args.outputPath, filename, args);
+            ++processedPolarities;
+            continue;
+        }
 
         if (args.printProfileSection)
             printProfileSections(&inputFile, &args, &selectedIndices, filename);
