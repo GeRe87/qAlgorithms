@@ -1759,7 +1759,9 @@ namespace qAlgorithms
 
             const bool left = local.b1 < 0.0;
             const double curvature = left ? fit.b2 : fit.b3;
-            if (!(curvature < 0.0))
+            // Both tails must be concave for an isolated unimodal peak.
+            // Otherwise a stationary point on one side can be spurious.
+            if (!(fit.b2 < 0.0 && fit.b3 < 0.0) || !(curvature < 0.0))
                 continue;
 
             const double xApex = -local.b1 / (2.0 * curvature);
