@@ -1788,6 +1788,209 @@ namespace qAlgorithms
         return fit;
     }
 
+
+    // The instrument transform is deliberately explicit in the CLI. We do
+    // not infer an Orbitrap/TOF law from only the file name or peak shape.
+    static double foldingCoordinate(const double mz, const FoldingSamplingAxis axis)
+    {
+        if (!(mz > 0.0) || !std::isfinite(mz))
+            throw std::domain_error("Folding requires finite, positive m/z samples");
+        if (axis == FoldingSamplingAxis::tofSqrtMz)
+            return std::sqrt(mz);
+        if (axis == FoldingSamplingAxis::orbitrapInvSqrtMz)
+            return -1.0 / std::sqrt(mz);
+        throw std::invalid_argument("Unknown peak-folding instrument axis");
+    }
+
+    // Inverse of the chosen native sampling coordinate. It is NOT a
+    // calibration of the mass axis; errors in supplied m/z are not modeled.
+    static double foldedMz(const double u, const double anchorMz,
+                           const double step, const FoldingSamplingAxis axis,
+                           double *derivative)
+    {
+        const double native = foldingCoordinate(anchorMz, axis) + step * u;
+        if (axis == FoldingSamplingAxis::tofSqrtMz)
+        {
+            if (!(native > 0.0)) return NAN;
+            *derivative = 2.0 * step * native;
+            return native * native;
+        }
+        if (native >= 0.0) return NAN;
+        *derivative = -2.0 * step / (native * native * native);
+        return 1.0 / (native * native);
+    }
+
+    FoldingSpectrumFit foldSpectrumProfiles(
+        const float *mz, const float *intensity, const size_t length,
+        const FoldingSamplingAxis axis, const FoldingCurvatureMode mode,
+        const double minimumApexIntensity)
+    {
+        if (mz == nullptr || intensity == nullptr ||
+            !std::isfinite(minimumApexIntensity) || !(minimumApexIntensity > 0.0) ||
+            (axis != FoldingSamplingAxis::tofSqrtMz &&
+             axis != FoldingSamplingAxis::orbitrapInvSqrtMz))
+            throw std::invalid_argument("Invalid folding spectrum, intensity threshold or axis");
+
+        FoldingSpectrumFit result;
+        if (length < 7)
+            return result;
+
+        std::vector<double> coordinates(length);
+        std::vector<double> spacings;
+        spacings.reserve(length - 1);
+        for (size_t i = 0; i < length; ++i)
+        {
+            coordinates[i] = foldingCoordinate(static_cast<double>(mz[i]), axis);
+            if (!std::isfinite(intensity[i]))
+                throw std::domain_error("Folding spectrum has nonfinite intensity values");
+            if (i == 0) continue;
+            const double spacing = coordinates[i] - coordinates[i - 1];
+            if (!(spacing > 0.0) || !std::isfinite(spacing))
+                throw std::domain_error("Folding spectrum m/z must be strictly increasing");
+            spacings.push_back(spacing);
+        }
+
+        // A lower quantile resists the large gaps caused by omitted zero
+        // samples. It does not imply that such gaps are real zero intensities.
+        const size_t index = spacings.size() / 3;
+        std::nth_element(spacings.begin(), spacings.begin() + static_cast<std::ptrdiff_t>(index),
+                         spacings.end());
+        const double step = spacings[index];
+        if (!(step > 0.0) || !std::isfinite(step))
+            throw std::domain_error("No identifiable TOF/Orbitrap sampling step");
+        result.samplingStep = step;
+
+        struct Candidate
+        {
+            size_t anchorIndex = 0;
+            double anchorMz = 0, anchorIntensity = 0;
+            std::vector<double> u;
+            std::vector<float> logY;
+        };
+        std::vector<Candidate> candidates;
+
+        constexpr size_t halfWidth = 4;
+        constexpr double maximumStepRatio = 1.45;
+        constexpr double minimumStepRatio = 0.55;
+
+        const auto localMaximum = [intensity, length](const size_t i)
+        {
+            return i > 0 && i + 1 < length &&
+                   intensity[i] > intensity[i - 1] &&
+                   intensity[i] >= intensity[i + 1];
+        };
+        for (size_t centre = 1; centre + 1 < length; ++centre)
+        {
+            if (!localMaximum(centre) ||
+                !(static_cast<double>(intensity[centre]) >= minimumApexIntensity))
+                continue;
+            ++result.observedMaxima;
+            const double height = static_cast<double>(intensity[centre]);
+
+            // Reject closely spaced additional maxima (possible shoulders,
+            // unresolved ions, ringing). This is a conservative selection,
+            // not an instrument-validated peak-isolation criterion.
+            bool ambiguous = false;
+            const size_t lo = centre > 2 * halfWidth ? centre - 2 * halfWidth : 1;
+            const size_t hi = std::min(length - 2, centre + 2 * halfWidth);
+            for (size_t k = lo; k <= hi; ++k)
+                if (k != centre && localMaximum(k) &&
+                    static_cast<double>(intensity[k]) > 0.15 * height)
+                {
+                    ambiguous = true;
+                    break;
+                }
+            if (ambiguous) continue;
+
+            std::vector<size_t> left, right;
+            for (int side : {-1, 1})
+            {
+                size_t previous = centre;
+                double previousIntensity = height;
+                for (size_t d = 1; d <= halfWidth; ++d)
+                {
+                    if ((side < 0 && d > centre) ||
+                        (side > 0 && d >= length - centre))
+                        break;
+                    const size_t k = side < 0 ? centre - d : centre + d;
+                    const double value = static_cast<double>(intensity[k]);
+                    const double spacing = std::abs(coordinates[k] - coordinates[previous]);
+                    if (!(value > 0.0) ||
+                        spacing < minimumStepRatio * step ||
+                        spacing > maximumStepRatio * step ||
+                        value > previousIntensity * 1.12)
+                        break;
+                    if (side < 0) left.push_back(k);
+                    else right.push_back(k);
+                    previous = k;
+                    previousIntensity = value;
+                }
+            }
+            // At least two observed samples on each side are needed for a
+            // meaningful centre fit and to identify distinct curvatures.
+            if (left.size() < 2 || right.size() < 2)
+                continue;
+
+            Candidate cand;
+            cand.anchorIndex = centre;
+            cand.anchorMz = mz[centre];
+            cand.anchorIntensity = height;
+            cand.u.reserve(left.size() + 1 + right.size());
+            cand.logY.reserve(left.size() + 1 + right.size());
+            const auto append = [&](const size_t k)
+            {
+                cand.u.push_back((coordinates[k] - coordinates[centre]) / step);
+                cand.logY.push_back(static_cast<float>(
+                    std::log(static_cast<double>(intensity[k]))));
+            };
+            for (auto it = left.rbegin(); it != left.rend(); ++it) append(*it);
+            append(centre);
+            for (size_t k : right) append(k);
+            candidates.push_back(std::move(cand));
+        }
+
+        result.selectedCandidates = candidates.size();
+        if (candidates.size() < 2)
+            return result;
+
+        std::vector<FoldingProfileView> views;
+        views.reserve(candidates.size());
+        for (const Candidate &cand : candidates)
+            views.push_back({cand.u.data(), cand.logY.data(), cand.u.size()});
+
+        result.fit = fitPeakFoldingLinear(views, mode);
+        result.fitted = true;
+        result.peaks.reserve(candidates.size());
+        for (size_t j = 0; j < candidates.size(); ++j)
+        {
+            const Candidate &cand = candidates[j];
+            FoldingSpectrumPeak peak;
+            peak.anchorIndex = cand.anchorIndex;
+            peak.pointCount = cand.u.size();
+            peak.anchorMz = cand.anchorMz;
+            peak.anchorIntensity = cand.anchorIntensity;
+            peak.coefficients = result.fit.peaks[j];
+
+            if (peak.coefficients.hasInteriorApex)
+            {
+                double derivative = 0.0;
+                const double mzApex = foldedMz(peak.coefficients.apexU,
+                                               peak.anchorMz, step, axis,
+                                               &derivative);
+                if (std::isfinite(mzApex) && mzApex > 0.0 &&
+                    std::isfinite(derivative))
+                {
+                    peak.apexMz = mzApex;
+                    peak.apexUncertaintyMz =
+                        std::abs(derivative) * peak.coefficients.apexStandardError;
+                    peak.validApex = std::isfinite(peak.apexUncertaintyMz);
+                }
+            }
+            result.peaks.push_back(peak);
+        }
+        return result;
+    }
+
 #pragma endregion "running regression"
 
 #pragma region "validate Regression"
