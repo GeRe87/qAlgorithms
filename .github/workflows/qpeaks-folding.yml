@@ -6,6 +6,11 @@ on:
       - "src/qalgorithms_qpeaks.cpp"
       - "include/qalgorithms_qpeaks.h"
       - "test/test_qpeaks_folding.cpp"
+      - "src/qalgorithms_main.cpp"
+      - "src/qalgorithms_input_output.cpp"
+      - "include/qalgorithms_input_output.h"
+      - "test/integration/test_folding_cli.py"
+      - "CMakeLists.txt"
       - ".github/workflows/qpeaks-folding.yml"
   workflow_dispatch:
 
@@ -26,7 +31,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel 2
       - name: Verify folding and previous multi-trace regressions
-        run: ctest --test-dir build --output-on-failure -R "^test_qpeaks_(folding|multitrace)$"
+        run: ctest --test-dir build --output-on-failure -R "^test_(folding_cli|qpeaks_(folding|multitrace))$"
       - name: Run whole suite (known legacy failures are non-gating)
         continue-on-error: true
         run: ctest --test-dir build --output-on-failure
