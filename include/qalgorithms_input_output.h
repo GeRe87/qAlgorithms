@@ -62,6 +62,7 @@ namespace qAlgorithms
         // Experimental native-profile folding; never enabled implicitly.
         bool peakFolding = false;
         bool foldingSymmetric = false;
+        bool foldingOptionSpecified = false;
         FoldingCliAxis foldingAxis = FoldingCliAxis::unspecified;
         double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
         size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
