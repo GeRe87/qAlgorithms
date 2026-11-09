@@ -126,14 +126,14 @@ namespace qAlgorithms
     // Fits are visited in centre-major, then increasing-scale order. The b0
     // storage in the callback view is reused: copy it if it must be retained.
     // Throws std::invalid_argument on empty input, nullptrs or length < 5.
-    void forEachSharedShapeCoefficients(
+    void forEachCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         size_t length,
         const SharedShapeFitVisitor &visit);
 
     // Collecting equivalent of the streaming API. Output order is scale-major,
     // matching findCoefficients; memory is proportional to the result size.
-    void findSharedShapeCoefficients(
+    void findCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         size_t length,
         std::vector<SharedShapeRegCoeffs> *coeffs);
