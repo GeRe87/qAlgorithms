@@ -236,6 +236,7 @@ namespace qAlgorithms
             }
             else if (argument == "--folding-axis")
             {
+                args.foldingOptionSpecified = true;
                 if (++i == argc)
                     throw std::invalid_argument("--folding-axis requires tof or orbitrap");
                 const std::string value = argv[i];
@@ -245,6 +246,7 @@ namespace qAlgorithms
             }
             else if (argument == "--folding-model")
             {
+                args.foldingOptionSpecified = true;
                 if (++i == argc)
                     throw std::invalid_argument("--folding-model requires symmetric or asymmetric");
                 const std::string value = argv[i];
@@ -254,6 +256,7 @@ namespace qAlgorithms
             }
             else if (argument == "--folding-min-intensity")
             {
+                args.foldingOptionSpecified = true;
                 if (++i == argc)
                     throw std::invalid_argument("--folding-min-intensity requires a positive number");
                 size_t parsed = 0;
@@ -265,6 +268,7 @@ namespace qAlgorithms
             }
             else if (argument == "--folding-max-scans")
             {
+                args.foldingOptionSpecified = true;
                 if (++i == argc)
                     throw std::invalid_argument("--folding-max-scans requires a positive integer");
                 size_t parsed = 0;
@@ -498,9 +502,7 @@ namespace qAlgorithms
                 goodInputs = false;
             }
         }
-        else if (args.foldingAxis != FoldingCliAxis::unspecified ||
-                 args.foldingSymmetric || args.foldingMaxScans != 0 ||
-                 args.foldingMinIntensity != 100.0)
+        else if (args.foldingOptionSpecified)
         {
             (void)fprintf(stderr, "Error: folding-specific options require --peak-folding.\n");
             goodInputs = false;
