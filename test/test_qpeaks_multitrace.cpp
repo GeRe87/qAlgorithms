@@ -164,6 +164,37 @@ namespace
                near(observed.b3, reference[m + 2], 4e-5L, 3e-5L);
     }
 
+
+    bool checkSingleTraceCompatibility()
+    {
+        // The existing single-trace regression must not change and the
+        // new running regression with m=1 must agree at EVERY centre/scale.
+        const size_t length = 41;
+        std::vector<float> trace(length);
+        for (size_t i = 0; i < length; ++i)
+        {
+            const int x = static_cast<int>(i) - 20;
+            trace[i] = static_cast<float>(2000 + 3*x - (x<0 ? 2 : 3)*x*x +
+                                          static_cast<int>(i % 3) - 1);
+        }
+        std::vector<RegCoeffs> legacy;
+        findCoefficients(trace.data(), length, &legacy);
+        std::vector<SharedShapeRegCoeffs> multi;
+        findCoefficientsMultiTrace({trace.data()}, length, &multi);
+        if (legacy.size() != multi.size()) return false;
+        for (size_t i = 0; i < legacy.size(); ++i)
+        {
+            if (multi[i].b0.size() != 1 ||
+                multi[i].scale != legacy[i].scale || multi[i].x0 != legacy[i].x0 ||
+                !near(multi[i].b0[0], legacy[i].b0, 1e-8L, 1e-9L) ||
+                !near(multi[i].b1, legacy[i].b1, 1e-8L, 1e-9L) ||
+                !near(multi[i].b2, legacy[i].b2, 1e-8L, 1e-9L) ||
+                !near(multi[i].b3, legacy[i].b3, 1e-8L, 1e-9L))
+                return false;
+        }
+        return true;
+    }
+
     bool checkCollectedOrder()
     {
         const size_t length = 9;
@@ -219,7 +250,7 @@ int main()
                 return 1;
             }
         }
-    if (!checkCollectedOrder() || !invalidInputsThrow())
+    if (!checkSingleTraceCompatibility() || !checkCollectedOrder() || !invalidInputsThrow())
     {
         std::cerr << "Multi-trace ordering or invalid-input tests failed\n";
         return 1;
