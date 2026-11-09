@@ -16,7 +16,7 @@ namespace
     using Matrix = std::vector<std::vector<long double>>;
 
     bool near(const long double actual, const long double expected,
-              const long double relative = 3e-6L, const long double absolute = 1e-12L)
+              const long double relative = 3e-6L, const long double absolute = 1e-15L)
     {
         return std::abs(actual - expected) <= absolute + relative * std::abs(expected);
     }
