@@ -5,6 +5,7 @@
 // internal
 #include "qalgorithms_datatypes.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -137,6 +138,72 @@ namespace qAlgorithms
         const std::vector<const float *> &logTraces,
         size_t length,
         std::vector<SharedShapeRegCoeffs> *coeffs);
+
+    // Experimental linear folding of several independent mass profiles.
+    //
+    // log(I_j) = b0[j] + b1[j]*u +
+    //            (u < 0 ? b2 : b3)*u*u
+    //
+    // All profiles may have DIFFERENT u coordinates and point counts. They
+    // must use consistent local units, with u=0 near the candidate peak.
+    // The curvature breakpoint remains at u=0; an individual slope changes
+    // the fitted apex but does NOT translate that breakpoint. Symmetric mode
+    // represents translated quadratic peaks exactly.
+    enum class FoldingCurvatureMode : uint8_t
+    {
+        symmetric,
+        asymmetric
+    };
+
+    struct FoldingProfileView
+    {
+        const double *u = nullptr;       // local instrument sampling coordinates
+        const float *logIntensity = nullptr; // already logarithmized, strictly finite
+        size_t length = 0;
+    };
+
+    struct FoldingPeakEstimate
+    {
+        double b0 = 0, b1 = 0;
+        double residualSumSquares = 0;
+        // Entries of (X^T X)^-1 before multiplication by the pooled log-MSE:
+        double varianceB0Factor = 0, varianceB1Factor = 0;
+        double covarianceB0B1Factor = 0;
+        double covarianceB1B2Factor = 0, covarianceB1B3Factor = 0;
+        // Conditional delta-method apex uncertainty. Assumes a concave side
+        // and an apex within the observed u range. Does not include anchor,
+        // coordinate-calibration, selection or model-shape uncertainty.
+        bool hasInteriorApex = false;
+        double apexU = 0, apexVarianceFactor = 0, apexStandardError = 0;
+    };
+
+    struct FoldingLinearFit
+    {
+        FoldingCurvatureMode mode = FoldingCurvatureMode::asymmetric;
+        double b2 = 0, b3 = 0;
+        // Row-major covariance of (b2,b3), divided by the residual MSE.
+        // In symmetric mode both coefficients are identical and perfectly
+        // correlated, so the expanded 2x2 covariance is rank one.
+        std::array<double, 4> curvatureCovarianceFactor = {};
+        double residualSumSquares = 0, mse = 0;
+        size_t degreesOfFreedom = 0;
+        std::vector<FoldingPeakEstimate> peaks;
+    };
+
+    // Ordinary least squares with trace-specific intercepts and slopes and
+    // shared quadratic curvature(s). Eliminates 2x2 local blocks and solves
+    // only a 1x1 (symmetric) or 2x2 (asymmetric) Schur complement.
+    // Scratch space is O(number of profiles); no interpolation, nonlinear
+    // optimization or growing inverse matrix. Throws std::invalid_argument
+    // for invalid/nonfinite data or too few residual degrees of freedom,
+    // std::domain_error for rank-deficient designs.
+    //
+    // Statistical results assume fixed u coordinates, independent,
+    // homoscedastic log-domain errors. No correction for correlated profile
+    // samples, imperfect peak selection or the physical signal baseline.
+    FoldingLinearFit fitPeakFoldingLinear(
+        const std::vector<FoldingProfileView> &profiles,
+        FoldingCurvatureMode mode = FoldingCurvatureMode::asymmetric);
 
     // mutate b0 so that it is optimal for the exponential case if b1, b2 and b3 are identical
 
