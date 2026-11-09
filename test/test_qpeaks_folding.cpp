@@ -262,6 +262,23 @@ namespace
         return true;
     }
 
+    bool testNonPeakCurvature()
+    {
+        // One side is convex. Even when the other side has a stationary
+        // point, it is NOT an isolated mass peak with a reliable apex.
+        const double u[] = {-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0};
+        float y[7] = {};
+        for (size_t i = 0; i < 7; ++i)
+        {
+            const double x = u[i];
+            const double curvature = x < 0 ? -0.18 : 0.14;
+            y[i] = static_cast<float>(5.0 - 0.14 * x + curvature * x * x);
+        }
+        const auto fit = fitPeakFoldingLinear({{u, y, 7}},
+                                             FoldingCurvatureMode::asymmetric);
+        return fit.b2 < 0.0 && fit.b3 > 0.0 && !fit.peaks[0].hasInteriorApex;
+    }
+
     bool testInvalidAndSingular()
     {
         const auto data = makeData(1, FoldingCurvatureMode::asymmetric);
@@ -340,7 +357,8 @@ int main()
             }
         }
 
-    if (!testPhysicalPositionAndPooling() || !testInvalidAndSingular())
+    if (!testPhysicalPositionAndPooling() || !testNonPeakCurvature() ||
+        !testInvalidAndSingular())
     {
         std::cerr << "Folding shifted-apex, pooling or edge-case test failed\n";
         return 1;
