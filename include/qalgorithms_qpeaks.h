@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 namespace qAlgorithms
@@ -83,6 +84,60 @@ namespace qAlgorithms
         const size_t length,
         std::vector<RegCoeffs> *coeffs);
 
+    // Multi-trace running regression (same peak shape, trace-specific intercepts).
+    // Kept in qPeaks alongside the original single-trace findCoefficients.
+    // The intercepts belong to separate, equally sampled log-intensity traces.
+    // The slope and both piecewise quadratic coefficients are shared:
+    // y_j(x) = b0[j] + b1*x + (x < 0 ? b2 : b3)*x*x.
+    struct SharedShapeRegCoeffs
+    {
+        std::vector<double> b0;
+        double b1 = 0, b2 = 0, b3 = 0;
+        size_t x0 = 0;
+        uint16_t scale = 0;
+    };
+
+    // The seven unique nonzero entries of the inverse normal matrix for
+    // any m >= 2. Index order: b0[0..m-1], b1, b2, b3. For m=1, the
+    // diagonal/off-diagonal intercept distinction degenerates harmlessly.
+    struct SharedShapeMatInverse
+    {
+        double interceptDiagonal = 0;    // each (b0_j, b0_j)
+        double interceptOffDiagonal = 0; // each (b0_j, b0_k), j != k
+        double interceptCurvature = 0;   // each (b0_j, b2) and (b0_j, b3)
+        double slopeVariance = 0;        // (b1, b1)
+        double slopeCurvature = 0;       // (b1, b2); (b1, b3) is negative
+        double curvatureVariance = 0;    // (b2, b2) and (b3, b3)
+        double curvatureCovariance = 0;  // (b2, b3)
+    };
+
+    // Derive all seven multi-trace inverse values from the EXISTING six-value
+    // single-trace cache. Neither a new cache nor a larger matrix is needed.
+    // Throws std::invalid_argument for scale outside [2,215] or traceCount=0.
+    SharedShapeMatInverse sharedShapeInverseForScale(size_t scale, size_t traceCount);
+
+    using SharedShapeFitVisitor = std::function<void(const SharedShapeRegCoeffs &)>;
+
+    // Streaming, O(number of traces) scratch-space running regression.
+    // Each trace must point to 'length' log-intensity samples at the SAME
+    // equidistant x positions. Every window uses -scale ... +scale with scale
+    // in [2, min(215, (length-1)/2)], including its centre point.
+    //
+    // Fits are visited in centre-major, then increasing-scale order. The b0
+    // storage in the callback view is reused: copy it if it must be retained.
+    // Throws std::invalid_argument on empty input, nullptrs or length < 5.
+    void forEachCoefficientsMultiTrace(
+        const std::vector<const float *> &logTraces,
+        size_t length,
+        const SharedShapeFitVisitor &visit);
+
+    // Collecting equivalent of the streaming API. Output order is scale-major,
+    // matching findCoefficients; memory is proportional to the result size.
+    void findCoefficientsMultiTrace(
+        const std::vector<const float *> &logTraces,
+        size_t length,
+        std::vector<SharedShapeRegCoeffs> *coeffs);
+
     // mutate b0 so that it is optimal for the exponential case if b1, b2 and b3 are identical
 
     enum invalid // NOLINT @todo rework causes for invalidation
@@ -137,11 +192,11 @@ namespace qAlgorithms
     //      | 4  1  0  0  0 |    : x^2 values for x < 0
     //      | 0  0  0  1  4 |    : x^2 values for x > 0
 
-    // It contains one additional row of all ones for every additional peak that is added into the model
+    // A multi-trace design adds one intercept column per aligned trace, but keeps the same three shared shape columns.
 
-    // When adding multiple peaks to the regression model, we need to adjust the inverse values.
-    // This will change the number of unique values in the inv_values array from 6 to 7.
-    // Here we use the inv_array[1] position and shift all values from that point onwards to the right.
+    // For m aligned traces with separate b0 and shared b1,b2,b3, the inverse has seven
+    // unique nonzero entries for m >= 2 (counting sign changes as equivalent).
+    // A1 = 1/n + (A-1/n)/m, A2 = (A-1/n)/m; B,C,D,E,F are divided by m.
     // example for num_peaks = 2:
     // original matrix with the unique values [a, b, c, d, e, f] (six unique values)
     // | A  0  B  B |
@@ -166,8 +221,8 @@ namespace qAlgorithms
     // | B   B   B  -D  F  E |
 
     // Note that no more than seven different values are needed per scale, even for a multidimensional approach.
-    // A1 and A2 can be calculated from the initial values of A and B, which is why they are not included in the
-    // precomputation.
+    // A1 and A2 are derived from the existing cached A, the scale's n=2*scale+1,
+    // and the runtime trace count; no second precomputed cache is necessary.
 } // namespace qAlgorithms
 
 #endif

@@ -1,0 +1,36 @@
+name: qPeaks multi-trace tests
+
+on:
+  pull_request:
+    paths:
+      - "src/qalgorithms_qpeaks.cpp"
+      - "include/qalgorithms_qpeaks.h"
+      - "test/test_qpeaks_multitrace.cpp"
+      - ".github/workflows/qpeaks-multitrace.yml"
+  workflow_dispatch:
+
+jobs:
+  qpeaks-multitrace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz-dev cmake g++
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Run multi-trace regression tests
+        run: ctest --test-dir build --output-on-failure -R "^test_qpeaks_multitrace$"
+      - name: Run all tests (report existing failures)
+        if: success()
+        continue-on-error: true
+        run: ctest --test-dir build --output-on-failure
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qpeaks-multitrace-ctest
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
