@@ -144,7 +144,7 @@ namespace
         SharedShapeRegCoeffs observed;
         size_t matches = 0;
         size_t visited = 0;
-        forEachSharedShapeCoefficients(pointers, length,
+        forEachCoefficientsMultiTrace(pointers, length,
             [&](const SharedShapeRegCoeffs &fit)
             {
                 ++visited;
@@ -170,7 +170,7 @@ namespace
         std::vector<float> a{2, 3, 4, 7, 11, 8, 4, 2, 1};
         std::vector<float> b{6, 7, 8, 11, 15, 12, 8, 6, 5};
         std::vector<SharedShapeRegCoeffs> all;
-        findSharedShapeCoefficients({a.data(), b.data()}, length, &all);
+        findCoefficientsMultiTrace({a.data(), b.data()}, length, &all);
         size_t pos = 0;
         for (size_t scale = 2; scale <= 4; ++scale)
             for (size_t centre = scale; centre + scale < length; ++centre)
@@ -187,15 +187,15 @@ namespace
     {
         const std::vector<float> one(5, 1.0f);
         const SharedShapeFitVisitor visit = [](const SharedShapeRegCoeffs &) {};
-        try { forEachSharedShapeCoefficients({}, 5, visit); return false; }
+        try { forEachCoefficientsMultiTrace({}, 5, visit); return false; }
         catch (const std::invalid_argument &) {}
-        try { forEachSharedShapeCoefficients({one.data()}, 4, visit); return false; }
+        try { forEachCoefficientsMultiTrace({one.data()}, 4, visit); return false; }
         catch (const std::invalid_argument &) {}
-        try { forEachSharedShapeCoefficients({nullptr}, 5, visit); return false; }
+        try { forEachCoefficientsMultiTrace({nullptr}, 5, visit); return false; }
         catch (const std::invalid_argument &) {}
-        try { forEachSharedShapeCoefficients({one.data()}, 5, {}); return false; }
+        try { forEachCoefficientsMultiTrace({one.data()}, 5, {}); return false; }
         catch (const std::invalid_argument &) {}
-        try { findSharedShapeCoefficients({one.data()}, 5, nullptr); return false; }
+        try { findCoefficientsMultiTrace({one.data()}, 5, nullptr); return false; }
         catch (const std::invalid_argument &) {}
         try { sharedShapeInverseForScale(1, 1); return false; }
         catch (const std::invalid_argument &) {}
