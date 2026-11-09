@@ -1426,7 +1426,7 @@ namespace qAlgorithms
         };
     }
 
-    void forEachSharedShapeCoefficients(
+    void forEachCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         const size_t length,
         const SharedShapeFitVisitor &visit)
@@ -1508,7 +1508,7 @@ namespace qAlgorithms
         }
     }
 
-    void findSharedShapeCoefficients(
+    void findCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         const size_t length,
         std::vector<SharedShapeRegCoeffs> *coeffs)
@@ -1528,7 +1528,7 @@ namespace qAlgorithms
         }
         coeffs->clear();
         coeffs->resize(count);
-        forEachSharedShapeCoefficients(logTraces, length,
+        forEachCoefficientsMultiTrace(logTraces, length,
             [coeffs, &offsets](const SharedShapeRegCoeffs &fit)
             {
                 const size_t offset = offsets[fit.scale] + fit.x0 - fit.scale;
