@@ -1,4 +1,3 @@
-#include "qalgorithms_multitrace.h"
 #include "qalgorithms_qpeaks.h"
 
 #include <algorithm>
