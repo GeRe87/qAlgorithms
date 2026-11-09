@@ -66,13 +66,13 @@ pointwise *mean trace*. The separate intercepts are the mean intercept
 plus each trace's window-mean offset. This equivalence holds exactly
 for aligned, unweighted traces.
 
-The streaming forEachSharedShapeCoefficients API follows the existing
+The streaming forEachCoefficientsMultiTrace API follows the existing
 running-sum strategy, updating all trace-specific intercept sums and the
 three shared weighted sums as the scale grows. Scratch memory is O(m);
 the inverse cache stays at **six doubles per scale**, and work per fit is
 O(m). Its visitor receives a reused result object in centre-major order.
 
-findSharedShapeCoefficients collects the same results in scale-major order,
+findCoefficientsMultiTrace collects the same results in scale-major order,
 matching the pre-existing findCoefficients API. Collecting all intercepts
 across all candidate windows naturally uses O(m * windows) memory.
 
@@ -90,3 +90,13 @@ across all candidate windows naturally uses O(m * windows) memory.
   full design independently, checks the seven-entry inverse and solves
   the normal equations for m=1,2,3,10 and h=2,3,8,25,100,215. It also
   verifies result ordering and invalid-input handling.
+
+## Source organization
+
+The functions `sharedShapeInverseForScale`, `forEachCoefficientsMultiTrace`
+(non-collecting), and `findCoefficientsMultiTrace` (collecting) are defined
+inside `src/qalgorithms_qpeaks.cpp`, next to the original single-trace
+`findCoefficients`. Their types and public declarations live in
+`include/qalgorithms_qpeaks.h`. The original single-trace hot path and
+its cached table are unchanged. No extra production C++ translation unit
+or additional inverse-cache file is required.
