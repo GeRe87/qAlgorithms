@@ -1536,6 +1536,256 @@ namespace qAlgorithms
             });
     }
 
+
+    // Experimental linear peak folding. The original running-regression
+    // kernels and their six-value inverse cache are deliberately untouched.
+    // Eliminating local intercept/slope pairs avoids an O(m^3) inverse.
+    namespace
+    {
+        struct FoldingMoments
+        {
+            long double n = 0, sx = 0, sxx = 0;
+            long double sy = 0, sxy = 0;
+            long double k[2][2] = {};
+            long double hinv[2][2] = {};
+            long double hk[2][2] = {};
+            long double hy[2] = {};
+            double minU = 0, maxU = 0;
+        };
+    }
+
+    FoldingLinearFit fitPeakFoldingLinear(
+        const std::vector<FoldingProfileView> &profiles,
+        const FoldingCurvatureMode mode)
+    {
+        if (profiles.empty() ||
+            (mode != FoldingCurvatureMode::symmetric &&
+             mode != FoldingCurvatureMode::asymmetric))
+            throw std::invalid_argument("Invalid folding model or empty profile list");
+
+        const size_t p = mode == FoldingCurvatureMode::symmetric ? 1 : 2;
+        if (profiles.size() > (SIZE_MAX - 2) / 3)
+            throw std::invalid_argument("Too many folding profiles");
+
+        std::vector<FoldingMoments> moments(profiles.size());
+        long double gram[2][2] = {};
+        long double rhs[2] = {};
+        size_t totalN = 0;
+
+        for (size_t j = 0; j < profiles.size(); ++j)
+        {
+            const FoldingProfileView &profile = profiles[j];
+            if (profile.u == nullptr || profile.logIntensity == nullptr ||
+                profile.length < 3 || profile.length > SIZE_MAX - totalN)
+                throw std::invalid_argument("Invalid folding profile arrays or point count");
+
+            totalN += profile.length;
+            FoldingMoments &m = moments[j];
+            m.n = static_cast<long double>(profile.length);
+
+            for (size_t i = 0; i < profile.length; ++i)
+            {
+                const double ui = profile.u[i];
+                const double yi = static_cast<double>(profile.logIntensity[i]);
+                if (!std::isfinite(ui) || !std::isfinite(yi))
+                    throw std::invalid_argument("Folding needs finite local coordinates and log intensities");
+
+                if (i == 0) m.minU = m.maxU = ui;
+                else
+                {
+                    m.minU = std::min(m.minU, ui);
+                    m.maxU = std::max(m.maxU, ui);
+                }
+
+                const long double x = static_cast<long double>(ui);
+                const long double y = static_cast<long double>(yi);
+                const long double x2 = x * x;
+                const long double g[2] = {
+                    p == 1 || x < 0 ? x2 : 0.0L,
+                    p == 2 && x >= 0 ? x2 : 0.0L
+                };
+
+                m.sx += x; m.sxx += x2;
+                m.sy += y; m.sxy += x * y;
+                for (size_t a = 0; a < p; ++a)
+                {
+                    m.k[0][a] += g[a];
+                    m.k[1][a] += x * g[a];
+                    rhs[a] += g[a] * y;
+                    for (size_t b = 0; b < p; ++b)
+                        gram[a][b] += g[a] * g[b];
+                }
+            }
+
+            const long double det = m.n * m.sxx - m.sx * m.sx;
+            if (!(det > 0.0L))
+                throw std::domain_error("Folding profile has no identifiable intercept and slope");
+
+            m.hinv[0][0] = m.sxx / det;
+            m.hinv[0][1] = m.hinv[1][0] = -m.sx / det;
+            m.hinv[1][1] = m.n / det;
+            m.hy[0] = m.hinv[0][0] * m.sy + m.hinv[0][1] * m.sxy;
+            m.hy[1] = m.hinv[1][0] * m.sy + m.hinv[1][1] * m.sxy;
+            for (size_t a = 0; a < p; ++a)
+                for (size_t k = 0; k < 2; ++k)
+                    m.hk[k][a] = m.hinv[k][0] * m.k[0][a]
+                                + m.hinv[k][1] * m.k[1][a];
+        }
+
+        const size_t nParameters = 2 * profiles.size() + p;
+        if (totalN <= nParameters)
+            throw std::invalid_argument("Folding has no residual degrees of freedom");
+
+        // Schur complement after eliminating each peak's local [b0,b1].
+        long double schur[2][2] = {};
+        long double projectedRhs[2] = {};
+        for (size_t a = 0; a < p; ++a)
+        {
+            projectedRhs[a] = rhs[a];
+            for (size_t b = 0; b < p; ++b)
+                schur[a][b] = gram[a][b];
+
+            for (const FoldingMoments &m : moments)
+                projectedRhs[a] -= m.k[0][a] * m.hy[0]
+                                 + m.k[1][a] * m.hy[1];
+
+            for (size_t b = 0; b < p; ++b)
+                for (const FoldingMoments &m : moments)
+                    schur[a][b] -= m.k[0][a] * m.hk[0][b]
+                                 + m.k[1][a] * m.hk[1][b];
+        }
+
+        long double sinv[2][2] = {};
+        if (p == 1)
+        {
+            if (!(schur[0][0] > 0.0L))
+                throw std::domain_error("Symmetric folding curvature is not identifiable");
+            sinv[0][0] = 1.0L / schur[0][0];
+        }
+        else
+        {
+            const long double det = schur[0][0] * schur[1][1]
+                                  - schur[0][1] * schur[1][0];
+            if (!(schur[0][0] > 0.0L) || !(schur[1][1] > 0.0L) ||
+                !(det > 0.0L))
+                throw std::domain_error("Asymmetric folding curvatures are not identifiable");
+            sinv[0][0] = schur[1][1] / det;
+            sinv[0][1] = -schur[0][1] / det;
+            sinv[1][0] = -schur[1][0] / det;
+            sinv[1][1] = schur[0][0] / det;
+        }
+
+        long double beta[2] = {};
+        for (size_t a = 0; a < p; ++a)
+            for (size_t b = 0; b < p; ++b)
+                beta[a] += sinv[a][b] * projectedRhs[b];
+
+        FoldingLinearFit fit;
+        fit.mode = mode;
+        fit.b2 = static_cast<double>(beta[0]);
+        fit.b3 = static_cast<double>(beta[p - 1]);
+        fit.degreesOfFreedom = totalN - nParameters;
+        fit.peaks.resize(profiles.size());
+
+        const long double varLeft = sinv[0][0];
+        const long double varRight = sinv[p - 1][p - 1];
+        const long double covLeftRight = sinv[0][p - 1];
+        fit.curvatureCovarianceFactor = {
+            static_cast<double>(varLeft), static_cast<double>(covLeftRight),
+            static_cast<double>(covLeftRight), static_cast<double>(varRight)
+        };
+
+        for (size_t j = 0; j < profiles.size(); ++j)
+        {
+            const FoldingMoments &m = moments[j];
+            FoldingPeakEstimate &local = fit.peaks[j];
+            long double a = m.hy[0], b = m.hy[1];
+            for (size_t k = 0; k < p; ++k)
+            {
+                a -= m.hk[0][k] * beta[k];
+                b -= m.hk[1][k] * beta[k];
+            }
+            local.b0 = static_cast<double>(a);
+            local.b1 = static_cast<double>(b);
+
+            // Full upper-left inverse block:
+            // H_j^-1 + (H_j^-1 K_j) S^-1 (H_j^-1 K_j)^T.
+            long double extra00 = 0.0L, extra01 = 0.0L, extra11 = 0.0L;
+            long double covB1Shared[2] = {};
+            for (size_t k = 0; k < p; ++k)
+            {
+                for (size_t l = 0; l < p; ++l)
+                {
+                    extra00 += m.hk[0][k] * sinv[k][l] * m.hk[0][l];
+                    extra01 += m.hk[0][k] * sinv[k][l] * m.hk[1][l];
+                    extra11 += m.hk[1][k] * sinv[k][l] * m.hk[1][l];
+                    covB1Shared[l] -= m.hk[1][k] * sinv[k][l];
+                }
+            }
+            local.varianceB0Factor = static_cast<double>(m.hinv[0][0] + extra00);
+            local.varianceB1Factor = static_cast<double>(m.hinv[1][1] + extra11);
+            local.covarianceB0B1Factor = static_cast<double>(m.hinv[0][1] + extra01);
+            local.covarianceB1B2Factor = static_cast<double>(covB1Shared[0]);
+            local.covarianceB1B3Factor = static_cast<double>(covB1Shared[p - 1]);
+
+            // Only independent log observations that are supplied contribute.
+            // Omitted bins are not interpreted as zero-intensity samples.
+            const FoldingProfileView &profile = profiles[j];
+            long double rss = 0.0L;
+            for (size_t i = 0; i < profile.length; ++i)
+            {
+                const long double x = static_cast<long double>(profile.u[i]);
+                const long double x2 = x * x;
+                const long double curvature = p == 1 || x < 0 ? beta[0] : beta[1];
+                const long double predicted = a + b * x + curvature * x2;
+                const long double residual =
+                    static_cast<long double>(profile.logIntensity[i]) - predicted;
+                rss += residual * residual;
+            }
+            local.residualSumSquares = static_cast<double>(rss);
+            fit.residualSumSquares += local.residualSumSquares;
+        }
+
+        fit.mse = fit.residualSumSquares / static_cast<double>(fit.degreesOfFreedom);
+
+        for (size_t j = 0; j < profiles.size(); ++j)
+        {
+            FoldingPeakEstimate &local = fit.peaks[j];
+            const FoldingMoments &m = moments[j];
+            // For an asymmetric spline, the breakpoint at zero must be known;
+            // b1=0 is a nondifferentiable choice of side for its apex SE.
+            if (mode == FoldingCurvatureMode::asymmetric && local.b1 == 0.0)
+                continue;
+
+            const bool left = local.b1 < 0.0;
+            const double curvature = left ? fit.b2 : fit.b3;
+            if (!(curvature < 0.0))
+                continue;
+
+            const double xApex = -local.b1 / (2.0 * curvature);
+            if (xApex < m.minU || xApex > m.maxU)
+                continue;
+
+            const double dSlope = -1.0 / (2.0 * curvature);
+            const double dCurvature = local.b1 / (2.0 * curvature * curvature);
+            const double varCurvature = left
+                ? fit.curvatureCovarianceFactor[0]
+                : fit.curvatureCovarianceFactor[3];
+            const double covSlopeCurvature = left
+                ? local.covarianceB1B2Factor
+                : local.covarianceB1B3Factor;
+            const double v = dSlope * dSlope * local.varianceB1Factor
+                + dCurvature * dCurvature * varCurvature
+                + 2.0 * dSlope * dCurvature * covSlopeCurvature;
+
+            local.hasInteriorApex = true;
+            local.apexU = xApex;
+            local.apexVarianceFactor = std::max(0.0, v);
+            local.apexStandardError = std::sqrt(fit.mse * local.apexVarianceFactor);
+        }
+        return fit;
+    }
+
 #pragma endregion "running regression"
 
 #pragma region "validate Regression"
