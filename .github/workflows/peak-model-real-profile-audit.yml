@@ -1,0 +1,102 @@
+name: Real profile residual audit
+on:
+  push:
+    branches: [agent/peak-model-real-profile-audit]
+  pull_request:
+    paths: ['experiments/peak_model_audit/**', '.github/workflows/peak-model-real-profile-audit.yml', 'CMakeLists.txt']
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libz-dev ninja-build
+      - name: Install isolated audit dependencies
+        run: |
+          python3 -m venv ../audit-env
+          ../audit-env/bin/python -m pip install -r experiments/peak_model_audit/requirements.txt
+      - name: Build immutable declared-search base
+        run: |
+          git worktree add --detach ../baseline 03649958394fecc759de802ec429d4ecd5f27d95
+          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$(realpath ../baseline)=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
+          cmake --build ../baseline-build --parallel 2
+      - name: Build audit and existing production targets
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${GITHUB_WORKSPACE}=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_REAL_PROFILE_AUDIT=ON -DPython3_EXECUTABLE="$(realpath ../audit-env/bin/python)"
+          cmake --build build --parallel 2
+      - name: Full suites with exact known-failure accounting
+        shell: python
+        run: |
+          import subprocess, pathlib, re
+          for label,folder in [('baseline','../baseline-build'),('audit','build')]:
+              p=subprocess.run(['ctest','--test-dir',folder,'--output-on-failure'],capture_output=True,text=True)
+              pathlib.Path(label+'-ctest.log').write_text(p.stdout+p.stderr)
+              failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
+              assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'},(p.returncode,p.stdout,p.stderr)
+      - name: Exact legacy differential and nine paired benchmark trials
+        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding build/bench_peak_binding_extra | tee paired.json
+      - name: Independent CLI output differential
+        run: python3 experiments/peak_model_binding/compare_cli.py ../baseline-build/qAlgorithms build/qAlgorithms | tee cli-differential.log
+      - name: Record exact source and compiler provenance
+        run: |
+          git rev-parse HEAD > provenance.txt
+          c++ --version >> provenance.txt
+          lscpu >> provenance.txt
+      - name: Record common benchmark executable code sections
+        shell: python
+        run: |
+          import subprocess,pathlib,hashlib
+          sections=[]
+          for label,folder in [('baseline','../baseline-build'),('audit','build')]:
+              target=pathlib.Path(label+'-benchmark.text')
+              subprocess.run(['objcopy','-O','binary','--only-section=.text',folder+'/bench_peak_binding',str(target)],check=True)
+              sections.append(target.read_bytes())
+          pathlib.Path('benchmark-code.txt').write_text('baseline='+hashlib.sha256(sections[0]).hexdigest()+'\nsearch='+hashlib.sha256(sections[1]).hexdigest()+'\nidentical='+str(sections[0]==sections[1])+'\n')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-profile-audit-${{ matrix.config }}
+          path: |
+            *-ctest.log
+            paired.json
+            benchmark-code.txt
+            cli-differential.log
+            provenance.txt
+            build/compile_commands.json
+
+  real_data:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libz-dev ninja-build
+      - name: Install isolated analysis dependencies
+        run: |
+          python3 -m venv ../audit-env
+          ../audit-env/bin/python -m pip install -r experiments/peak_model_audit/requirements.txt
+      - name: Build isolated audit executable
+        run: |
+          cmake -S . -B build-real -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DQALGORITHMS_ENABLE_REAL_PROFILE_AUDIT=ON
+          cmake --build build-real --target real_peak_audit --parallel 2
+      - name: Checksum-verified public inputs and fixed-protocol audit
+        run: |
+          ../audit-env/bin/python experiments/peak_model_audit/fetch.py real-data
+          mkdir -p evidence
+          cp real-data/input-manifest.json evidence/
+          cp experiments/peak_model_audit/PROTOCOL.md evidence/
+          git rev-parse HEAD > evidence/head.txt
+          ./build-real/real_peak_audit real-data/injection1.mzML evidence/injection1.jsonl
+          ./build-real/real_peak_audit real-data/injection19.mzML evidence/injection19.jsonl
+          ../audit-env/bin/python experiments/peak_model_audit/analyze.py evidence/injection1.jsonl real-data/injection1.mzML evidence/injection1 > evidence/injection1.log
+          ../audit-env/bin/python experiments/peak_model_audit/analyze.py evidence/injection19.jsonl real-data/injection19.mzML evidence/injection19 > evidence/injection19.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-profile-two-injection-evidence
+          path: evidence/

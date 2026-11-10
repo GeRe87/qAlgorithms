@@ -1,0 +1,150 @@
+{
+  "source": "injection19.mzML",
+  "source_sha256": "7c558de55970efc7b415543bc2c341c8188568b47cae796c97fec7ca8b45b1f4",
+  "source_md5": "8bce27a1fdbe2ea0f0659d398b0bfaaf",
+  "numpy_version": "2.5.4",
+  "step": 0.35,
+  "seed": 617281,
+  "simulations_per_geometry": 10000,
+  "interpretation": "descriptive fixed-window projected-iid reference, not selection-adjusted p-values or raw-noise correlation",
+  "scans": {
+    "rejected_nonpositive_or_nonfinite": 80
+  },
+  "scan_samples": {
+    "points": 146059,
+    "zeros": 73945,
+    "negatives": 0,
+    "nonfinite": 0
+  },
+  "cohorts": {
+    "fixed_index_n9": {
+      "attempted": 5120,
+      "reasons": {
+        "nonpositive_or_nonfinite": 4897,
+        "eligible": 223
+      },
+      "statuses": {
+        "2": 168,
+        "1": 55
+      },
+      "eligible": 223,
+      "integrable": 55,
+      "apex_supported": 48,
+      "refit_valid": 223,
+      "area_se_available": 55,
+      "numeric_zero_energy": 0,
+      "outside_projection_reference": 11,
+      "lag_values_median": -0.3610787164693271,
+      "relative_area_se_median": 0.13713261727348391,
+      "per_scan_outside_fraction_median": 0.0
+    },
+    "fixed_index_n17": {
+      "attempted": 5120,
+      "reasons": {
+        "nonpositive_or_nonfinite": 5072,
+        "eligible": 48
+      },
+      "statuses": {
+        "1": 26,
+        "2": 22
+      },
+      "eligible": 48,
+      "integrable": 26,
+      "apex_supported": 26,
+      "refit_valid": 48,
+      "area_se_available": 26,
+      "numeric_zero_energy": 0,
+      "outside_projection_reference": 34,
+      "lag_values_median": 0.3827184307256494,
+      "relative_area_se_median": 0.2878051115403989,
+      "per_scan_outside_fraction_median": 1.0
+    },
+    "observed_maximum_n9": {
+      "attempted": 5070,
+      "reasons": {
+        "nonpositive_or_nonfinite": 4390,
+        "eligible": 680
+      },
+      "statuses": {
+        "2": 368,
+        "1": 312
+      },
+      "eligible": 680,
+      "integrable": 312,
+      "apex_supported": 303,
+      "refit_valid": 680,
+      "area_se_available": 312,
+      "numeric_zero_energy": 0,
+      "outside_projection_reference": 62,
+      "lag_values_median": -0.3784002451924514,
+      "relative_area_se_median": 0.12440304957274306,
+      "per_scan_outside_fraction_median": 0.0
+    },
+    "observed_maximum_n17": {
+      "attempted": 5070,
+      "reasons": {
+        "nonpositive_or_nonfinite": 4927,
+        "eligible": 143
+      },
+      "statuses": {
+        "1": 85,
+        "2": 58
+      },
+      "eligible": 143,
+      "integrable": 85,
+      "apex_supported": 85,
+      "refit_valid": 143,
+      "area_se_available": 85,
+      "numeric_zero_energy": 0,
+      "outside_projection_reference": 103,
+      "lag_values_median": 0.3792594921417805,
+      "relative_area_se_median": 0.32379521672402767,
+      "per_scan_outside_fraction_median": 0.8333333333333334
+    }
+  },
+  "projected_iid_reference": {
+    "9": {
+      "residual_df": 5,
+      "lag_95_reference": [
+        -0.8238350314855483,
+        -0.0013361724987256912
+      ],
+      "lag_median": -0.4459813531932265,
+      "dw_95_reference": [
+        1.9150446056965216,
+        3.627832282545515
+      ]
+    },
+    "17": {
+      "residual_df": 13,
+      "lag_95_reference": [
+        -0.6223046409489937,
+        0.19876048816280048
+      ],
+      "lag_median": -0.2347692245807606,
+      "dw_95_reference": [
+        1.5452587563610358,
+        3.208963913157141
+      ]
+    }
+  },
+  "width_sensitivity": {
+    "fixed_index": {
+      "paired_windows": 8,
+      "area17_over_area9_quantiles": [
+        0.9038072555562273,
+        1.1174273103095547,
+        1.1892339530917997
+      ]
+    },
+    "observed_maximum": {
+      "paired_windows": 66,
+      "area17_over_area9_quantiles": [
+        0.9199936727030288,
+        1.0835381853906032,
+        1.2897975551766332
+      ]
+    }
+  },
+  "max_kernel_qr_relative_coefficient_error": 3.519143305752823e-14
+}
