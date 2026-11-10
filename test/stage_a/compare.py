@@ -11,7 +11,7 @@ assert a == b, 'Legacy differential mismatch (zero tolerance)'
 measurements = [[], []]
 for trial in range(5):
     for index in ([0, 1] if trial % 2 == 0 else [1, 0]):
-        p = subprocess.run([[old, new][index], 'bench'], check=True, capture_output=True)
+        p = subprocess.run([str(Path([old, new][index]).with_name('test_stage_a_benchmark' + Path([old, new][index]).suffix))], check=True, capture_output=True)
         measurements[index].extend(float(line.split()[0]) for line in p.stderr.decode().splitlines())
 summary = {'exact_bytes': len(a), 'trials': 55, 'ns_per_window': []}
 for samples in measurements:

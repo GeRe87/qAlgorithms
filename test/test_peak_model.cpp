@@ -6,15 +6,6 @@
 #include <stdexcept>
 using namespace qAlgorithms;
 static void coeff(const RegCoeffs &c) { std::cout<<c.b0<<' '<<c.b1<<' '<<c.b2<<' '<<c.b3<<' '<<c.x0<<' '<<c.scale<<'\n'; }
-void benchmark() { // Identical separately compiled benchmark for both source versions.
-  std::vector<float> y(512); for(size_t i=0;i<y.size();++i)y[i]=float(std::sin(i*.07));
-  for(int trial=0;trial<11;++trial) { auto start=std::chrono::steady_clock::now(); size_t windows=0; double sum=0;
-   for(int pass=0;pass<30;++pass) {std::vector<RegCoeffs> c; 
-findCoefficients(y.data(),y.size(),&c);
-windows+=c.size(); for(auto &v:c) sum+=v.b0;}
-   auto end=std::chrono::steady_clock::now(); std::cerr<<std::chrono::duration<double,std::nano>(end-start).count()/windows<<' '<<sum<<'\n';
-  }
- }
 int main(int argc, char **) {
  std::cout<<std::hexfloat;
  for(int seed=0;seed<40;++seed) {
@@ -37,5 +28,5 @@ int main(int argc, char **) {
    for(auto &g:groups) { std::cout<<g.resultIndex<<' '<<int(g.reason)<<' '<<g.start<<' '<<g.end; for(auto i:g.maximaIndices) std::cout<<' '<<i; std::cout<<'\n'; }
   }
  }
- if(argc>1) benchmark();
+ (void)argc;
 }
