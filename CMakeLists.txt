@@ -213,6 +213,8 @@ if(QALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH)
     add_executable(bench_hyperbolic_running_research
         experiments/hyperbolic_running/bench.cpp)
     target_link_libraries(bench_hyperbolic_running_research PRIVATE qalgo_lib)
+    add_executable(real_hyperbolic_qtof_research experiments/hyperbolic_running/real_qtof.cpp)
+    target_link_libraries(real_hyperbolic_qtof_research PRIVATE qalgo_lib)
     if(BUILD_TESTING)
         add_test(NAME test_hyperbolic_running_research
                  COMMAND test_hyperbolic_running_research)
