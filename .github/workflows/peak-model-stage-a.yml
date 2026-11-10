@@ -8,6 +8,7 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         config: [Debug, Release]
     steps:
@@ -32,7 +33,7 @@ jobs:
           for label, folder in [('baseline','../baseline-build'),('stage','build')]:
               p=subprocess.run(['ctest','--test-dir',folder,'--output-on-failure'],capture_output=True,text=True)
               pathlib.Path(label+'-ctest.log').write_text(p.stdout+p.stderr)
-              failed=set(re.findall(r'\d+ - (\S+) \(Failed\)',p.stdout))
+              failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
               assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'}, (p.returncode,p.stdout,p.stderr)
       - name: Exact independent source differential and paired benchmark
         run: python3 test/stage_a/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model | tee differential.json
