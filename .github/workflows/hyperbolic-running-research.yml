@@ -42,3 +42,40 @@ jobs:
           name: hyperbolic-research-${{ matrix.configuration }}
           path: benchmark-${{ matrix.configuration }}.csv
           if-no-files-found: ignore
+
+
+  # Real external MS1 profile dataset is research-only and may be
+  # temporarily unavailable. It must never gate the numerical unit tests.
+  real_profile:
+    name: 'Real TripleTOF profile: matched raw windows'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz-dev cmake g++
+      - name: Build isolated native mzML comparator (Release)
+        run: |
+          cmake -S . -B build-real -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON
+          cmake --build build-real --target real_hyperbolic_qtof_research --parallel 2
+      - name: Download checksum-verified published QTOF profile mzML
+        run: |
+          curl --fail --location --retry 3 --connect-timeout 10 --max-time 180 \
+            --output /tmp/pool-qtof.mzML \
+            'https://zenodo.org/records/20729183/files/20171016_POOL_POS_1_105-134.mzML?download=1'
+          echo '4130309a9283c8b492660dbad1fd3670  /tmp/pool-qtof.mzML' | md5sum --check
+      - name: Compare same un-interpolated profile windows, postfit both models
+        run: |
+          mkdir -p real-out
+          ./build-real/real_hyperbolic_qtof_research /tmp/pool-qtof.mzML \
+            real-out/paired-real-tripletof.csv 80 2>&1 | tee real-out/run.log
+          python3 experiments/hyperbolic_running/summarize_real_qtof.py \
+            real-out/paired-real-tripletof.csv real-out/summary.json
+      - name: Upload reproducible source-linked, measured results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperbolic-real-tripletof-evidence
+          path: real-out/
+          if-no-files-found: ignore
