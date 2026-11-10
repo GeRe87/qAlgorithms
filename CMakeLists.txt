@@ -245,3 +245,13 @@ if(QALGORITHMS_ENABLE_PEAK_SEARCH_BENCH)
     add_executable(bench_peak_search experiments/peak_model_search/bench.cpp)
     target_link_libraries(bench_peak_search PRIVATE qalgo_lib)
 endif()
+
+option(QALGORITHMS_ENABLE_REAL_PROFILE_AUDIT "Build isolated real-profile residual audit" OFF)
+if(QALGORITHMS_ENABLE_REAL_PROFILE_AUDIT)
+    add_executable(real_peak_audit experiments/peak_model_audit/collect.cpp)
+    target_link_libraries(real_peak_audit PRIVATE qalgo_lib)
+    if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+        add_test(NAME test_real_profile_residual_reference
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/experiments/peak_model_audit/test_analyze.py")
+    endif()
+endif()
