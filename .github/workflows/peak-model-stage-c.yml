@@ -1,0 +1,57 @@
+name: Peak model Stage C
+on:
+  push:
+    branches: [agent/peak-model-inference-stage-c]
+  pull_request:
+    paths: ['include/qalgorithms_peak_inference.h', 'src/qalgorithms_peak_inference.cpp', 'test/test_peak_inference.cpp', 'experiments/peak_model_inference/**', '.github/workflows/peak-model-stage-c.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libz-dev ninja-build
+      - name: Build immutable Stage B
+        run: |
+          git worktree add --detach ../baseline b00d894bde26c6260ffe06653932465d03b9e8ea
+          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
+          cmake --build ../baseline-build --parallel 2
+      - name: Build Stage C and research wrappers
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON
+          cmake --build build --parallel 2
+      - name: Full suites with exact known-failure accounting
+        shell: python
+        run: |
+          import subprocess, pathlib, re
+          for label,folder in [('baseline','../baseline-build'),('stage-c','build')]:
+              p=subprocess.run(['ctest','--test-dir',folder,'--output-on-failure'],capture_output=True,text=True)
+              pathlib.Path(label+'-ctest.log').write_text(p.stdout+p.stderr)
+              failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
+              assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'},(p.returncode,p.stdout,p.stderr)
+      - name: Exact legacy differential and nine paired benchmark trials
+        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding build/bench_peak_binding_extra | tee paired.json
+      - name: Independent CLI output differential
+        run: python3 experiments/peak_model_binding/compare_cli.py ../baseline-build/qAlgorithms build/qAlgorithms | tee cli-differential.log
+      - name: Selected-window inference timing and provenance
+        run: |
+          ./build/bench_peak_inference > inference.csv
+          git rev-parse HEAD > provenance.txt
+          c++ --version >> provenance.txt
+          lscpu >> provenance.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peak-model-stage-c-${{ matrix.config }}
+          path: |
+            *-ctest.log
+            paired.json
+            inference.csv
+            cli-differential.log
+            provenance.txt
+            build/compile_commands.json
