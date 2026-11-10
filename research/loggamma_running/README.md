@@ -76,7 +76,7 @@ d = sum_j r_j / sum_j S_j
 
 The inverse `G^-1`, `h`, and Schur denominator `S` depend only on
 the coordinate geometry, lambda and orientation: they can be cached.
-The memory cost is O(number of pooled profiles); the Schur solve is scalar.
+For identical uniform geometries the cached design occupies O(window length) memory and per-trace moments occupy O(number of profiles). Distinct nonuniform geometries require their own basis arrays (up to O(total samples)). The Schur solve is scalar.
 Different sampling patterns and profile lengths remain valid but require
 corresponding geometries.
 
@@ -115,14 +115,16 @@ Run from this folder:
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
-The five deterministic tests verify:
+The seven deterministic tests verify:
 - Exact apex positions and Gamma total areas of translated peaks, both orientations
 - Constant-time rolling moments against direct recomputation over 318 shifts
 - Multiple profile lengths in one shared fit
 - Nonuniform profiles and rejection of irregular-grid rolling updates
 - Degenerate design and nonintegrable-fit rejection
+- Independently assembled full dense OLS on noisy nonuniform profiles (both orientations)
+- Analytical area versus independent Simpson quadrature (both orientations)
 
-Locally the five tests passed with Python 3. The tests are a proof of
+Locally all seven tests passed with Python 3. The tests are a proof of
 mathematical/numerical feasibility, not scientific mass-calibration
 or instrument validation. In particular, the exact-response tests are
 deliberately generated from the assumed model.
