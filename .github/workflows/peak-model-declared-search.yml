@@ -19,11 +19,11 @@ jobs:
       - name: Build immutable Stage C
         run: |
           git worktree add --detach ../baseline 5807cc81661000d0d8e467ef50440cbf3c8ddc28
-          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
+          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$(realpath ../baseline)=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
           cmake --build ../baseline-build --parallel 2
       - name: Build declared search and research wrappers
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_SEARCH_BENCH=ON
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${GITHUB_WORKSPACE}=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_SEARCH_BENCH=ON
           cmake --build build --parallel 2
       - name: Full suites with exact known-failure accounting
         shell: python

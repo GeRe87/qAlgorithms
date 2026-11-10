@@ -118,7 +118,12 @@ Timing variation between identical code remains possible on shared hardware.
 Dedicated Debug/Release CI builds immutable Stage C separately, runs full suites,
 exact numerical and 27-file CLI differentials, and the same nine paired common
 benchmarks with recorded compiler flags and CPU. It also records executable code
-section hashes, raw bounded-search timings and null-family test output. Final
+section hashes, raw bounded-search timings and null-family test output. Both
+checkouts use matched -ffile-prefix-map flags to normalize embedded source paths:
+Debug assertions otherwise embed different baseline/current checkout filenames,
+which can change executable layout and confound timing despite unchanged sources.
+This changes CI provenance paths only; normal project compiler flags are untouched.
+Final
 HEAD, CI links and performance distributions are in the Draft PR.
 
 The optional bench_peak_search measures the whole new diagnostic plan evaluation:
