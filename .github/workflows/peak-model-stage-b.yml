@@ -1,0 +1,64 @@
+name: Peak model Stage B
+on:
+  push:
+    branches: [agent/peak-model-binding-stage-b]
+  pull_request:
+    paths: ['include/qalgorithms_peak_fit.h', 'include/detail/**', 'src/qalgorithms_peak_fit.cpp', 'test/test_peak_fit.cpp', 'experiments/peak_model_binding/**', '.github/workflows/peak-model-stage-b.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libz-dev ninja-build
+      - name: Build original Stage A
+        run: |
+          git worktree add --detach ../baseline 6a1a4c39b213fa1d0ff84a611f3e1a8da9620b7f
+          mkdir -p ../baseline/experiments/peak_model_binding
+          cp experiments/peak_model_binding/bench.cpp ../baseline/experiments/peak_model_binding/
+          cat >> ../baseline/CMakeLists.txt <<'CMAKE'
+          add_executable(bench_peak_binding experiments/peak_model_binding/bench.cpp)
+          target_link_libraries(bench_peak_binding PRIVATE qalgo_lib)
+          CMAKE
+          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON
+          cmake --build ../baseline-build --parallel 2
+      - name: Build Stage B and research wrappers
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
+          cmake --build build --parallel 2
+      - name: Full suites with exact known-failure accounting
+        shell: python
+        run: |
+          import subprocess, pathlib, re
+          for label,folder in [('baseline','../baseline-build'),('stage-b','build')]:
+              p=subprocess.run(['ctest','--test-dir',folder,'--output-on-failure'],capture_output=True,text=True)
+              pathlib.Path(label+'-ctest.log').write_text(p.stdout+p.stderr)
+              failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
+              assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'},(p.returncode,p.stdout,p.stderr)
+      - name: Exact legacy differential and nine paired benchmark trials
+        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding | tee paired.json
+      - name: Independent CLI output differential
+        run: python3 experiments/peak_model_binding/compare_cli.py ../baseline-build/qAlgorithms build/qAlgorithms | tee cli-differential.log
+      - name: Mechanical kernel relocation proof and provenance
+        shell: python
+        run: |
+          import pathlib,subprocess
+          old=pathlib.Path('../baseline/experiments/hyperbolic_running/hyperbolic_running.hpp').read_text()
+          new=pathlib.Path('include/detail/qalgorithms_hyperbolic.h').read_text().replace('namespace qAlgorithms::detail::hyperbolic','namespace hyperbolic_research')
+          assert old==new,'Kernel equations changed during relocation'
+          pathlib.Path('provenance.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],text=True)+subprocess.check_output(['c++','--version'],text=True)+subprocess.check_output(['lscpu'],text=True))
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peak-model-stage-b-${{ matrix.config }}
+          path: |
+            *-ctest.log
+            paired.json
+            cli-differential.log
+            provenance.txt
+            build/compile_commands.json

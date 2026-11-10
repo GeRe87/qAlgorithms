@@ -261,4 +261,5 @@ int main(){
                  <<"  fixed-geometry running windows; closed Bessel area vs quadrature;\n"
                  <<"  apex and identifiability guards.\n";
     }catch(const std::exception &error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}
+    return 0;
 }
