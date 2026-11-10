@@ -1,0 +1,204 @@
+#include "qalgorithms_peak_search.h"
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
+
+namespace qAlgorithms
+{
+    namespace peak_model
+    {
+        namespace
+        {
+            bool windowLess(const PeakSearchWindow &left, const PeakSearchWindow &right)
+            {
+                return left.center < right.center || (left.center == right.center && left.scale < right.scale);
+            }
+
+            void collectUnresolvedGroups(HyperbolicSearchResult *result)
+            {
+                std::vector<size_t> order = result->candidateIndices;
+                std::sort(order.begin(), order.end(), [&](size_t left, size_t right)
+                {
+                    const auto &a = result->windows[left].window;
+                    const auto &b = result->windows[right].window;
+                    const size_t startA = a.center - a.scale, startB = b.center - b.scale;
+                    return startA < startB || (startA == startB && left < right);
+                });
+                UnresolvedSearchGroup group;
+                auto appendGroup = [&]()
+                {
+                    if (group.windowIndices.size() > 1)
+                    {
+                        std::sort(group.windowIndices.begin(), group.windowIndices.end());
+                        result->unresolvedGroups.push_back(std::move(group));
+                    }
+                    group = {};
+                };
+                for (size_t index : order)
+                {
+                    const auto &window = result->windows[index].window;
+                    const size_t start = window.center - window.scale, end = window.center + window.scale;
+                    if (!group.windowIndices.empty() && start > group.end)
+                    {
+                        appendGroup();
+                    }
+                    if (group.windowIndices.empty())
+                    {
+                        group.start = start;
+                        group.end = end;
+                    }
+                    else
+                    {
+                        group.end = std::max(group.end, end);
+                    }
+                    group.windowIndices.push_back(index);
+                }
+                appendGroup();
+                std::sort(result->unresolvedGroups.begin(), result->unresolvedGroups.end(),
+                    [](const UnresolvedSearchGroup &left, const UnresolvedSearchGroup &right)
+                {
+                    return left.windowIndices.front() < right.windowIndices.front();
+                });
+                for (size_t i = 0; i < result->unresolvedGroups.size(); ++i)
+                {
+                    for (size_t index : result->unresolvedGroups[i].windowIndices)
+                    {
+                        result->windows[index].unresolvedGroup = i;
+                    }
+                }
+            }
+        }
+
+        HyperbolicSearchPlan::HyperbolicSearchPlan(
+            size_t length,
+            double fixedStep,
+            std::vector<PeakSearchWindow> windows,
+            const HyperbolicSearchOptions &options)
+            : length_(length), fixedStep_(fixedStep), windows_(std::move(windows)), options_(options), familySize_(0)
+        {
+            if (length < 5 || windows_.empty() || !(options.familyAlpha > 0 && options.familyAlpha < 1)
+                || !std::isfinite(options.familyAlpha)
+                || (options.selection != WindowSelection::exploratory && options.selection != WindowSelection::prespecified))
+            {
+                throw std::invalid_argument("Invalid declared search plan");
+            }
+            size_t maxScale = 2;
+            for (const auto &window : windows_)
+            {
+                if (window.scale < 2 || window.center >= length || window.scale > window.center
+                    || window.scale > length - 1 - window.center)
+                {
+                    throw std::invalid_argument("Declared search window outside trace");
+                }
+                maxScale = std::max(maxScale, window.scale);
+            }
+            // Validate all geometry independently of observations. The existing
+            // selected-window API owns its own caches during evaluation.
+            const HyperbolicModel::Geometry geometry(maxScale, fixedStep);
+            (void)geometry;
+            std::sort(windows_.begin(), windows_.end(), windowLess);
+            for (size_t i = 1; i < windows_.size(); ++i)
+            {
+                if (windows_[i - 1].center == windows_[i].center && windows_[i - 1].scale == windows_[i].scale)
+                {
+                    throw std::invalid_argument("Duplicate window in declared search family");
+                }
+            }
+            if (options.totalFamilySize != 0 && options.totalFamilySize < windows_.size())
+            {
+                throw std::invalid_argument("Declared family cannot be smaller than complete search plan");
+            }
+            familySize_ = options.totalFamilySize == 0 ? windows_.size() : options.totalFamilySize;
+        }
+
+        const std::vector<PeakSearchWindow> &HyperbolicSearchPlan::windows() const
+        {
+            return windows_;
+        }
+
+        size_t HyperbolicSearchPlan::familySize() const
+        {
+            return familySize_;
+        }
+
+        HyperbolicSearchResult HyperbolicSearchPlan::evaluate(const std::vector<const float *> &rawTraces) const
+        {
+            if (rawTraces.empty())
+            {
+                throw std::invalid_argument("Search requires at least one aligned raw trace");
+            }
+            for (const float *raw : rawTraces)
+            {
+                if (raw == nullptr)
+                {
+                    throw std::invalid_argument("Null raw search trace");
+                }
+                for (size_t i = 0; i < length_; ++i)
+                {
+                    if (!(raw[i] > 0 && std::isfinite(raw[i])))
+                    {
+                        throw std::invalid_argument("Search requires positive finite uncensored observations");
+                    }
+                }
+            }
+            HyperbolicInferenceOptions inferenceOptions;
+            inferenceOptions.selection = options_.selection;
+            inferenceOptions.familyAlpha = options_.familyAlpha;
+            inferenceOptions.minimumSamplesPerSide = options_.minimumSamplesPerSide;
+            inferenceOptions.familySize = familySize_;
+            HyperbolicSearchResult result;
+            result.length = length_;
+            result.traceCount = rawTraces.size();
+            result.fixedStep = fixedStep_;
+            result.options = options_;
+            result.familySize = familySize_;
+            result.windows.reserve(windows_.size());
+            for (const auto &window : windows_)
+            {
+                PeakSearchResult entry;
+                entry.window = window;
+                entry.inference = inferHyperbolicWindow(rawTraces, length_, window.center, window.scale, fixedStep_, inferenceOptions);
+                const size_t index = result.windows.size();
+                if (entry.inference.groupDecision == ConditionalDecision::passed)
+                {
+                    result.candidateIndices.push_back(index);
+                }
+                result.windows.push_back(std::move(entry));
+            }
+            collectUnresolvedGroups(&result);
+            return result;
+        }
+
+        HyperbolicSearchPlan makeUniformHyperbolicSearchPlan(
+            size_t length,
+            double fixedStep,
+            size_t minScale,
+            size_t maxScale,
+            size_t centerStride,
+            const HyperbolicSearchOptions &options)
+        {
+            if (length < 5 || minScale < 2 || minScale > maxScale || maxScale > (length - 1) / 2 || centerStride == 0)
+            {
+                throw std::invalid_argument("Invalid uniform search geometry");
+            }
+            std::vector<PeakSearchWindow> windows;
+            const size_t lastCenter = length - 1 - minScale;
+            for (size_t center = minScale; center <= lastCenter;)
+            {
+                const size_t largest = std::min(maxScale, std::min(center, length - 1 - center));
+                for (size_t scale = minScale; scale <= largest; ++scale)
+                {
+                    windows.push_back({center, scale});
+                }
+                if (centerStride > lastCenter - center)
+                {
+                    break;
+                }
+                center += centerStride;
+            }
+            return HyperbolicSearchPlan(length, fixedStep, std::move(windows), options);
+        }
+    }
+}

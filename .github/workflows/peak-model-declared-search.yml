@@ -1,0 +1,70 @@
+name: Declared peak-model search
+on:
+  push:
+    branches: [agent/peak-model-declared-search]
+  pull_request:
+    paths: ['include/qalgorithms_peak_search.h', 'src/qalgorithms_peak_search.cpp', 'test/test_peak_search.cpp', 'experiments/peak_model_search/**', '.github/workflows/peak-model-declared-search.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sudo apt-get update && sudo apt-get install -y libz-dev ninja-build
+      - name: Build immutable Stage C
+        run: |
+          git worktree add --detach ../baseline 5807cc81661000d0d8e467ef50440cbf3c8ddc28
+          cmake -S ../baseline -B ../baseline-build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$(realpath ../baseline)=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON
+          cmake --build ../baseline-build --parallel 2
+      - name: Build declared search and research wrappers
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${GITHUB_WORKSPACE}=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_SEARCH_BENCH=ON
+          cmake --build build --parallel 2
+      - name: Full suites with exact known-failure accounting
+        shell: python
+        run: |
+          import subprocess, pathlib, re
+          for label,folder in [('baseline','../baseline-build'),('search','build')]:
+              p=subprocess.run(['ctest','--test-dir',folder,'--output-on-failure'],capture_output=True,text=True)
+              pathlib.Path(label+'-ctest.log').write_text(p.stdout+p.stderr)
+              failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
+              assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'},(p.returncode,p.stdout,p.stderr)
+      - name: Exact legacy differential and nine paired benchmark trials
+        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding build/bench_peak_binding_extra | tee paired.json
+      - name: Independent CLI output differential
+        run: python3 experiments/peak_model_binding/compare_cli.py ../baseline-build/qAlgorithms build/qAlgorithms | tee cli-differential.log
+      - name: Search timing, null-family evidence and provenance
+        run: |
+          ./build/bench_peak_search > search.csv
+          ./build/tests_bin/test_peak_search > search-validation.log
+          git rev-parse HEAD > provenance.txt
+          c++ --version >> provenance.txt
+          lscpu >> provenance.txt
+      - name: Record common benchmark executable code sections
+        shell: python
+        run: |
+          import subprocess,pathlib,hashlib
+          sections=[]
+          for label,folder in [('baseline','../baseline-build'),('search','build')]:
+              target=pathlib.Path(label+'-benchmark.text')
+              subprocess.run(['objcopy','-O','binary','--only-section=.text',folder+'/bench_peak_binding',str(target)],check=True)
+              sections.append(target.read_bytes())
+          pathlib.Path('benchmark-code.txt').write_text('baseline='+hashlib.sha256(sections[0]).hexdigest()+'\nsearch='+hashlib.sha256(sections[1]).hexdigest()+'\nidentical='+str(sections[0]==sections[1])+'\n')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peak-model-search-${{ matrix.config }}
+          path: |
+            *-ctest.log
+            paired.json
+            benchmark-code.txt
+            search.csv
+            search-validation.log
+            cli-differential.log
+            provenance.txt
+            build/compile_commands.json

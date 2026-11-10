@@ -1,6 +1,8 @@
 """Independent Stage-A/Stage-B binary differential and alternating paired timing."""
 import json
 import statistics
+import shutil
+import tempfile
 import subprocess
 import sys
 from pathlib import Path
@@ -10,22 +12,27 @@ b=subprocess.run([new_probe],check=True,capture_output=True).stdout
 assert a==b,'Legacy output mismatch (zero tolerance)'
 data=[{},{}]
 counts=[{},{}]
-for trial in range(9):
-    for index in ([0,1] if trial%2==0 else [1,0]):
-        output=subprocess.check_output([[old_bench,new_bench][index]],text=True)
-        for line in output.splitlines():
+with tempfile.TemporaryDirectory(prefix='peak-benchmark-') as temporary:
+    common_bench=Path(temporary)/('benchmark'+Path(old_bench).suffix)
+    for trial in range(9):
+        for index in ([0,1] if trial%2==0 else [1,0]):
+            # Identical argv[0]/working directory prevents checkout-path length
+            # from changing the child process stack layout. Copying is untimed.
+            shutil.copy2([old_bench,new_bench][index], common_bench)
+            output=subprocess.check_output([str(common_bench)],text=True)
+            for line in output.splitlines():
+                name,m,ns,count=line.split(',')
+                key=name+'_'+m
+                data[index].setdefault(key,[]).append(float(ns))
+                counts[index][key]=int(count)
+        # Binding-only costs come from a separate executable, so common timing
+        # binaries have identical translation units and compiler settings.
+        for line in subprocess.check_output([extra_bench],text=True).splitlines():
             name,m,ns,count=line.split(',')
-            key=name+'_'+m
-            data[index].setdefault(key,[]).append(float(ns))
-            counts[index][key]=int(count)
-    # Binding-only costs come from a separate executable, so common timing
-    # binaries have identical translation units and compiler settings.
-    for line in subprocess.check_output([extra_bench],text=True).splitlines():
-        name,m,ns,count=line.split(',')
-        if name.startswith('binding_'):
-            key=name+'_'+m
-            data[1].setdefault(key,[]).append(float(ns))
-            counts[1][key]=int(count)
+            if name.startswith('binding_'):
+                key=name+'_'+m
+                data[1].setdefault(key,[]).append(float(ns))
+                counts[1][key]=int(count)
 for key in data[0]:
     assert counts[0][key]==counts[1][key],(key,'unequal windows/traces')
 def summary(values):
