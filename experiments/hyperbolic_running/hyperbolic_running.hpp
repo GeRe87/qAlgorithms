@@ -205,4 +205,140 @@ inline double predict(const LocalFit &p, double b, double u) {
     return p.intercept+b*u-p.curvature*std::cosh(u)-p.skew*std::sinh(u);
 }
 
+    
+// POST-FIT ONLY, not part of the O(1) running-regression hot loop.
+// For fixed (b,C,D) and raw observations I_i >= 0, minimize
+//     sum_i (I_i - A*exp(b*u_i-C*cosh(u_i)-D*sinh(u_i)))^2.
+// The exact scalar OLS solution is A=sum(I_i*f_i)/sum(f_i*f_i).
+// It changes only a_j=log(A), never the linear log-domain shape estimates.
+// The log-amplitude variance factor below includes the *dependence* of the
+// refit on the first-stage pooled log-OLS shape coefficients. It assumes the
+// raw intensities are exp(the same independent, homoskedastic log-observations).
+// Multiply by the first-stage log-residual MSE for a first-order variance.
+// This is NOT a complete covariance/area-uncertainty calculation.
+struct AmplitudeRefit {
+    bool valid=false;
+    double logAmplitude=std::numeric_limits<double>::quiet_NaN();
+    double logCorrection=std::numeric_limits<double>::quiet_NaN();
+    double rawResidualSumSquares=std::numeric_limits<double>::quiet_NaN();
+    double logAmplitudeVarianceFactor=std::numeric_limits<double>::quiet_NaN();
+};
+
+inline AmplitudeRefit refitRawAmplitude(
+    const float *rawIntensity, std::size_t length, std::size_t center,
+    const WindowGeometry &geometry, double step,
+    const LocalFit &peak, double sharedSlope, std::size_t pooledTraceCount)
+{
+    if (rawIntensity==nullptr || pooledTraceCount==0 || center>=length ||
+        geometry.scale<2 || geometry.scale>center ||
+        geometry.scale>length-1-center || !(step>0 && std::isfinite(step)))
+        throw std::invalid_argument("Invalid raw-amplitude refit window or trace count");
+
+    AmplitudeRefit result;
+    if (!geometry.identifiable || !std::isfinite(peak.intercept) ||
+        !std::isfinite(peak.curvature) || !std::isfinite(peak.skew) ||
+        !std::isfinite(sharedSlope))
+        return result;
+    const std::size_t half=geometry.scale;
+    const std::size_t start=center-half;
+    const std::size_t end=center+half+1;
+
+    // Normalize the shape before exponentiation to avoid under/overflow
+    // when the unnormalized exponential contains very large coefficients.
+    double maxLogShape=-std::numeric_limits<double>::infinity();
+    for(std::size_t i=start;i<end;++i) {
+        if (!(std::isfinite(rawIntensity[i]) && rawIntensity[i]>=0))
+            return result;
+        const double u=step*(static_cast<double>(i)-static_cast<double>(center));
+        const double v=sharedSlope*u-peak.curvature*std::cosh(u)
+                                         -peak.skew*std::sinh(u);
+        if(!std::isfinite(v))return result;
+        maxLogShape=std::max(maxLogShape,v);
+    }
+
+    long double numerator=0., denominator=0.;
+    long double nwU=0., nwC=0., nwS=0.;
+    long double dwU=0., dwC=0., dwS=0.;
+    for(std::size_t i=start;i<end;++i) {
+        const double u=step*(static_cast<double>(i)-static_cast<double>(center));
+        const double c=std::cosh(u),s=std::sinh(u);
+        const double z=sharedSlope*u-peak.curvature*c-peak.skew*s;
+        const long double g=std::exp(z-maxLogShape);
+        const long double raw=static_cast<long double>(rawIntensity[i]);
+        const long double weighted=raw*g, squared=g*g;
+        numerator+=weighted;
+        denominator+=squared;
+        nwU+=weighted*u; nwC+=weighted*c; nwS+=weighted*s;
+        dwU+=squared*u;  dwC+=squared*c;  dwS+=squared*s;
+    }
+    if (!(numerator>0 && denominator>0) ||
+        !std::isfinite(numerator) || !std::isfinite(denominator))
+        return result;
+    const long double fittedA=numerator/denominator;
+    const long double fittedLogA=std::log(fittedA)-maxLogShape;
+    if (!std::isfinite(fittedLogA) ||
+        !std::isfinite(static_cast<double>(fittedLogA)))
+        return result;
+
+    // Derivatives of the fitted log-amplitude with respect to shape b,C,D,
+    // keeping observed raw intensities fixed.
+    const long double gb=nwU/numerator-2*dwU/denominator;
+    const long double gc=-nwC/numerator+2*dwC/denominator;
+    const long double gd=-nwS/numerator+2*dwS/denominator;
+    const long double invVc=geometry.invCenteredCoshNorm2;
+    const long double invSs=geometry.invSinhNorm2;
+    const long double R=1.0L/geometry.invOddResidualNorm2;
+    const long double t=(gb+geometry.kappa*gd)/
+                           (static_cast<long double>(pooledTraceCount)*R);
+
+    // First-order influence on log-amplitude from ALL pooled log observations:
+    // local trace: w_i - gc*(cosh_i-cbar)/Vc - gd*sinh_i/Ss + t*r_i
+    // other traces: t*r_i, where r_i=u_i-kappa*sinh_i.
+    // The cross-trace term is essential: the pooled b is uncertain.
+    long double variance=static_cast<long double>(pooledTraceCount-1)*t*t*R;
+    long double rawRSS=0.;
+    for(std::size_t i=start;i<end;++i) {
+        const double u=step*(static_cast<double>(i)-static_cast<double>(center));
+        const double c=std::cosh(u),s=std::sinh(u);
+        const double z=sharedSlope*u-peak.curvature*c-peak.skew*s;
+        const long double g=std::exp(z-maxLogShape);
+        const long double observed=rawIntensity[i];
+        const long double predicted=fittedA*g;
+        const long double residual=observed-predicted;
+        rawRSS+=residual*residual;
+        const long double wi=observed*g/numerator;
+        const long double ri=u-geometry.kappa*s;
+        const long double influence=wi-gc*(c-geometry.meanCosh)*invVc
+                                      -gd*s*invSs+t*ri;
+        variance+=influence*influence;
+    }
+    if (!(variance>=0) || !std::isfinite(variance) ||
+        !std::isfinite(static_cast<double>(variance)) ||
+        !std::isfinite(static_cast<double>(rawRSS)))
+        return result;
+    result.valid=true;
+    result.logAmplitude=static_cast<double>(fittedLogA);
+    result.logCorrection=result.logAmplitude-peak.intercept;
+    result.rawResidualSumSquares=static_cast<double>(rawRSS);
+    result.logAmplitudeVarianceFactor=static_cast<double>(variance);
+    return result;
+}
+
+// Convenience call for a retained multi-trace candidate. One refit per
+// trace, no modification of the shape coefficients or original FitView.
+inline std::vector<AmplitudeRefit> refitSelectedAmplitudes(
+    const std::vector<const float*> &rawTraces, std::size_t length,
+    const FitView &fit, const GeometryCache &cache)
+{
+    if (rawTraces.empty() || rawTraces.size()!=fit.locals.size())
+        throw std::invalid_argument("Raw traces do not match pooled log fit");
+    const auto &g=cache.at(fit.scale);
+    std::vector<AmplitudeRefit> corrected;
+    corrected.reserve(rawTraces.size());
+    for(std::size_t j=0;j<rawTraces.size();++j)
+        corrected.push_back(refitRawAmplitude(rawTraces[j],length,fit.center,
+                         g,cache.step(),fit.locals[j],fit.sharedSlope,rawTraces.size()));
+    return corrected;
+}
+
 } // namespace hyperbolic_research
