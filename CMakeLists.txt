@@ -202,3 +202,21 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(test_folding_cli PROPERTIES TIMEOUT 120)
 endif()
 endif()
+
+
+# Optional standalone research executables: no production qPeaks integration.
+option(QALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH
+       "Build isolated hyperbolic peak-running regression tests and benchmark" OFF)
+if(QALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH)
+    add_executable(test_hyperbolic_running_research
+        experiments/hyperbolic_running/test.cpp)
+    add_executable(bench_hyperbolic_running_research
+        experiments/hyperbolic_running/bench.cpp)
+    target_link_libraries(bench_hyperbolic_running_research PRIVATE qalgo_lib)
+    add_executable(real_hyperbolic_qtof_research experiments/hyperbolic_running/real_qtof.cpp)
+    target_link_libraries(real_hyperbolic_qtof_research PRIVATE qalgo_lib)
+    if(BUILD_TESTING)
+        add_test(NAME test_hyperbolic_running_research
+                 COMMAND test_hyperbolic_running_research)
+    endif()
+endif()
