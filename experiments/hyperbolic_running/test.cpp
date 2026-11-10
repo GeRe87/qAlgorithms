@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -145,6 +146,98 @@ void testExactSyntheticApexAndArea() {
     }
 }
 
+
+void testClosedRawAmplitudeRefit() {
+    constexpr std::size_t n=77, center=38, h=24;
+    const double step=.1, b=.8, C=4.2, D=.35, correctA=9.3;
+    GeometryCache cache(30,step);
+    std::vector<float> raw(n);
+    for(std::size_t i=0;i<n;++i){
+        const double u=(static_cast<double>(i)-center)*step;
+        raw[i]=static_cast<float>(std::exp(correctA+b*u-C*std::cosh(u)-D*std::sinh(u)));
+    }
+    const LocalFit original{correctA+.4,C,D};
+    const auto ref=refitRawAmplitude(raw.data(),n,center,cache.at(h),step,original,b,1);
+    require(ref.valid,"Exact amplitude refit should be valid");
+    near(ref.logAmplitude,correctA,5e-7,"Exact amplitude intercept");
+    near(ref.logCorrection,-.4,5e-7,"Exact amplitude correction");
+    near(ref.rawResidualSumSquares,0,1e-7,"Perfect shape raw SSE");
+    require(ref.logAmplitudeVarianceFactor>0,"Positive refit influence variance");
+    const LocalFit corrected{ref.logAmplitude,C,D};
+    near(std::exp(logAreaU(corrected,b)-logAreaU(original,b)),std::exp(-.4),
+         1e-6,"Corrected full Bessel area scales with intercept only");
+
+    std::vector<float> highCurvature(n);
+    const double highC=80., highA=85.;
+    for(std::size_t i=0;i<n;++i){
+        const double u=(static_cast<double>(i)-center)*step;
+        highCurvature[i]=static_cast<float>(std::exp(highA-highC*std::cosh(u)));
+    }
+    const LocalFit high{0.,highC,0.};
+    const auto stable=refitRawAmplitude(highCurvature.data(),n,center,cache.at(h),
+                                        step,high,0.,1);
+    require(stable.valid,"Scaled exponential refit must avoid overflow and underflow");
+    near(stable.logAmplitude,highA,5e-7,"Stable high-dynamic-range amplitude refit");
+
+    std::vector<float> invalid(n,0.f);
+    require(!refitRawAmplitude(invalid.data(),n,center,cache.at(h),step,original,b,1).valid,
+            "Zero total intensity must not create a valid amplitude");
+    invalid[center]=-1.f;
+    require(!refitRawAmplitude(invalid.data(),n,center,cache.at(h),step,original,b,1).valid,
+            "Negative raw intensities must be rejected");
+    invalid[center]=std::numeric_limits<float>::quiet_NaN();
+    require(!refitRawAmplitude(invalid.data(),n,center,cache.at(h),step,original,b,1).valid,
+            "Nonfinite raw intensities must be rejected");
+    bool thrown=false;
+    try{(void)refitRawAmplitude(raw.data(),n,n-2,cache.at(h),step,original,b,1);}
+    catch(const std::invalid_argument&){thrown=true;}
+    require(thrown,"Out-of-range window must be rejected");
+}
+
+void testAmplitudeInfluenceAgainstFiniteDifferences() {
+    const std::size_t m=3,n=25,center=12,h=9,target=1;
+    const double step=.16, eps=.002;
+    GeometryCache cache(11,step);
+    std::vector<std::vector<float>> logs(m,std::vector<float>(n));
+    for(std::size_t j=0;j<m;++j)
+        for(std::size_t i=0;i<n;++i) {
+            const double u=step*(static_cast<double>(i)-center);
+            logs[j][i]=static_cast<float>(
+                9.0+.13*j+.7*u-(4.4+.04*j)*std::cosh(u)
+                -(.12+.04*j)*std::sinh(u)
+                +.012*std::sin(.47*i+.27*j));
+        }
+    auto solveCorrected=[&](std::size_t changedTrace,std::size_t changedIndex,double delta){
+        std::vector<std::vector<float>> values=logs;
+        if(changedTrace<m) values[changedTrace][changedIndex]+=
+                                     static_cast<float>(delta);
+        std::vector<const float*> ptrs;
+        for(auto &v:values)ptrs.push_back(v.data());
+        const auto dense=solveReference(ptrs,center,h,step);
+        std::vector<float> raw(n);
+        for(std::size_t i=0;i<n;++i)raw[i]=std::exp(values[target][i]);
+        const LocalFit fitted{static_cast<double>(dense.beta[3*target]),
+                              static_cast<double>(dense.beta[3*target+1]),
+                              static_cast<double>(dense.beta[3*target+2])};
+        return refitRawAmplitude(raw.data(),n,center,cache.at(h),step,fitted,
+                                  static_cast<double>(dense.beta[3*m]),m);
+    };
+    const auto analytical=solveCorrected(m,0,0.); // no change
+    require(analytical.valid,"Reference influence calculation not valid");
+    long double sumsq=0;
+    for(std::size_t j=0;j<m;++j)
+        for(std::size_t i=center-h;i<=center+h;++i){
+            const auto positive=solveCorrected(j,i,eps);
+            const auto negative=solveCorrected(j,i,-eps);
+            require(positive.valid&&negative.valid,"Perturbed fit invalid");
+            const long double derivative=(positive.logAmplitude-negative.logAmplitude)/
+                                          (2*eps);
+            sumsq+=derivative*derivative;
+        }
+    near(analytical.logAmplitudeVarianceFactor,sumsq,3e-3,
+         "Full multitrace first-order intercept variance factor vs finite differences");
+}
+
 void testUnstableAndInvalidInputs(){
     bool caught=false;
     try {GeometryCache c(1,.1); (void)c;} catch(const std::invalid_argument&){caught=true;}
@@ -162,6 +255,8 @@ int main(){
         testDenseReference();
         testExactSyntheticApexAndArea();
         testUnstableAndInvalidInputs();
+        testClosedRawAmplitudeRefit();
+        testAmplitudeInfluenceAgainstFiniteDifferences();
         std::cout<<"PASS: dense OLS coefficients and covariance; pooled traces 1/3/10;\n"
                  <<"  fixed-geometry running windows; closed Bessel area vs quadrature;\n"
                  <<"  apex and identifiability guards.\n";
