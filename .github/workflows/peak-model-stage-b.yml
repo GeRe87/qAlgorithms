@@ -41,7 +41,7 @@ jobs:
               failed=set(re.findall(r'\d+ - (\S+) \([^)]*\)',p.stdout))
               assert failed=={'test_qpeaks','test_qpeaks_pt03','test_qpeaks_pt04'},(p.returncode,p.stdout,p.stderr)
       - name: Exact legacy differential and nine paired benchmark trials
-        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding | tee paired.json
+        run: python3 experiments/peak_model_binding/compare.py ../baseline-build/tests_bin/test_peak_model build/tests_bin/test_peak_model ../baseline-build/bench_peak_binding build/bench_peak_binding build/bench_peak_binding_extra | tee paired.json
       - name: Independent CLI output differential
         run: python3 experiments/peak_model_binding/compare_cli.py ../baseline-build/qAlgorithms build/qAlgorithms | tee cli-differential.log
       - name: Mechanical kernel relocation proof and provenance

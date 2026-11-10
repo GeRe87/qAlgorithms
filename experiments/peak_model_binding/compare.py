@@ -4,7 +4,7 @@ import statistics
 import subprocess
 import sys
 from pathlib import Path
-old_probe,new_probe,old_bench,new_bench=sys.argv[1:5]
+old_probe,new_probe,old_bench,new_bench,extra_bench=sys.argv[1:6]
 a=subprocess.run([old_probe],check=True,capture_output=True).stdout
 b=subprocess.run([new_probe],check=True,capture_output=True).stdout
 assert a==b,'Legacy output mismatch (zero tolerance)'
@@ -18,6 +18,14 @@ for trial in range(9):
             key=name+'_'+m
             data[index].setdefault(key,[]).append(float(ns))
             counts[index][key]=int(count)
+    # Binding-only costs come from a separate executable, so common timing
+    # binaries have identical translation units and compiler settings.
+    for line in subprocess.check_output([extra_bench],text=True).splitlines():
+        name,m,ns,count=line.split(',')
+        if name.startswith('binding_'):
+            key=name+'_'+m
+            data[1].setdefault(key,[]).append(float(ns))
+            counts[1][key]=int(count)
 for key in data[0]:
     assert counts[0][key]==counts[1][key],(key,'unequal windows/traces')
 def summary(values):

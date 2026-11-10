@@ -96,7 +96,7 @@ zero/negative/nonfinite raw input, invalid and near-boundary tails, unsupported
 area numeric range, poor identifiability and apex outside support.
 
 Local separate-library differential: 5,646,223 serialized bytes identical;
-23 synthetic mzML feature/group CSVs identical. This exercises centroid/EIC/feature
+27 synthetic mzML centroid/EIC/bin/feature/group CSVs identical. This exercises centroid/EIC/feature
 orchestration, not an exhaustive real-instrument accuracy corpus.
 
 Configure with research ON and optional binding benchmark:
@@ -112,7 +112,7 @@ The dedicated CI checks the exact failed-test set and uploads complete logs,
 compile commands, compiler/CPU provenance, legacy differentials and paired timing.
 It independently checks out immutable Stage A and builds both versions.
 
-`experiments/peak_model_binding/compare.py OLD_PROBE NEW_PROBE OLD_BENCH NEW_BENCH`
+`experiments/peak_model_binding/compare.py OLD_PROBE NEW_PROBE OLD_BENCH NEW_BENCH EXTRA_BINDING_BENCH`
 compares exact output and runs nine alternating-order paired trials. Benchmarks
 use identical standalone sources, 129 samples, identical 3969 multitrace windows,
 20 passes per measurement. Compare only matching kernel/window counts. Single-
