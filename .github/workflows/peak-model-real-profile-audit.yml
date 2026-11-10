@@ -27,7 +27,7 @@ jobs:
           cmake --build ../baseline-build --parallel 2
       - name: Build audit and existing production targets
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${GITHUB_WORKSPACE}=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_REAL_PROFILE_AUDIT=ON -DPython3_EXECUTABLE="$(realpath ../audit-env/bin/python)"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${GITHUB_WORKSPACE}=/qAlgorithms" -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON -DQALGORITHMS_ENABLE_PEAK_BINDING_BENCH=ON -DQALGORITHMS_ENABLE_PEAK_INFERENCE_BENCH=ON -DQALGORITHMS_ENABLE_REAL_PROFILE_AUDIT=ON -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/../audit-env/bin/python"
           cmake --build build --parallel 2
       - name: Full suites with exact known-failure accounting
         shell: python
