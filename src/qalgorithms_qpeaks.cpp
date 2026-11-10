@@ -163,8 +163,6 @@ namespace qAlgorithms
             return {r.position, r.height, r.fwhm, r.area,
                 r.position_unc, r.height_unc, r.area_unc, r.isValid, units};
         }
-        void Model<PeakModelKind::PiecewiseQuadratic>::runningFit(const float *y, size_t n, std::vector<Coefficients> *out)
-        { findCoefficients(y, n, out); }
         double Model<PeakModelKind::PiecewiseQuadratic>::logValue(const Coefficients *c, double x) { return regAt(c, x); }
         double Model<PeakModelKind::PiecewiseQuadratic>::refitAmplitude(const float *y, Span_i32 span, float *predicted, Coefficients *c)
         { return correctB0(y, span, predicted, c); }

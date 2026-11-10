@@ -377,6 +377,11 @@ namespace qAlgorithms
     // Note that no more than seven different values are needed per scale, even for a multidimensional approach.
     // A1 and A2 are derived from the existing cached A, the scale's n=2*scale+1,
     // and the runtime trace count; no second precomputed cache is necessary.
+    inline void peak_model::Model<PeakModelKind::PiecewiseQuadratic>::runningFit(
+        const float *y, size_t n, std::vector<Coefficients> *out)
+    {
+        findCoefficients(y, n, out);
+    }
 } // namespace qAlgorithms
 
 #endif
