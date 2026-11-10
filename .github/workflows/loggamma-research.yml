@@ -1,0 +1,26 @@
+name: Log-Gamma running folding research checks
+
+on:
+  push:
+    branches:
+      - research/loggamma-running-folding
+    paths:
+      - "research/loggamma_running/**"
+      - ".github/workflows/loggamma-research.yml"
+  pull_request:
+    paths:
+      - "research/loggamma_running/**"
+      - ".github/workflows/loggamma-research.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Independent closed-form / dense OLS / running-sum tests
+        run: python -m unittest discover -s research/loggamma_running -p "test_*.py" -v
