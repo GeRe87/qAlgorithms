@@ -123,6 +123,10 @@ checkouts use matched -ffile-prefix-map flags to normalize embedded source paths
 Debug assertions otherwise embed different baseline/current checkout filenames,
 which can change executable layout and confound timing despite unchanged sources.
 This changes CI provenance paths only; normal project compiler flags are untouched.
+The common paired benchmark also copies each binary to the SAME temporary executable
+path before invocation (outside timed regions), keeping argv[0] and the working
+directory identical. This removes another process/stack-layout difference without
+changing either benchmark program, category names or measurement counts.
 Final
 HEAD, CI links and performance distributions are in the Draft PR.
 
