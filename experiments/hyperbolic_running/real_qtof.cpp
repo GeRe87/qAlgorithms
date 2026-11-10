@@ -134,7 +134,16 @@ std::vector<Batch> selectedBatches(const std::filesystem::path &path,
     auto selected=qAlgorithms::filter_spectra(&file,true,
                   qAlgorithms::Polarities::positive,true);
     if(selected.empty())throw std::runtime_error("No positive profile MS1 spectra");
-    if(selected.size()>maxScans)selected.resize(maxScans);
+    if(selected.size()>maxScans) {
+        // Predeclared, approximately uniform retention-time coverage, rather
+        // than only the earliest spectra. Never choose scans by fitted outcome.
+        std::vector<uint32_t> stratified;
+        stratified.reserve(maxScans);
+        for(size_t k=0;k<maxScans;++k)
+            stratified.push_back(selected[
+                ((2*k+1)*selected.size())/(2*maxScans)]);
+        selected=std::move(stratified);
+    }
     std::vector<Batch> batches;
     std::vector<float> mz,intensity;
     size_t extracted=0;
