@@ -1,0 +1,44 @@
+name: Hyperbolic running research: paired qPeaks benchmark
+
+on:
+  push:
+    branches:
+      - research/hyperbolic-running-regression
+    paths:
+      - "experiments/hyperbolic_running/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/hyperbolic-running-research.yml"
+  pull_request:
+    paths:
+      - "experiments/hyperbolic_running/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/hyperbolic-running-research.yml"
+  workflow_dispatch:
+
+jobs:
+  verify_and_benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libz-dev cmake g++
+      - name: Configure research-only CMake targets
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.configuration }} -DBUILD_TESTING=ON -DQALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH=ON
+      - name: Build reference library, research test and benchmark
+        run: cmake --build build --target test_hyperbolic_running_research bench_hyperbolic_running_research --parallel 2
+      - name: Independent dense-OLS/covariance/Bessel validation
+        run: ctest --test-dir build -R "^test_hyperbolic_running_research$" --output-on-failure
+      - name: Paired production-kernel benchmark
+        run: ./build/bench_hyperbolic_running_research 9 8 | tee benchmark-${{ matrix.configuration }}.csv
+      - name: Upload paired benchmark data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperbolic-research-${{ matrix.configuration }}
+          path: benchmark-${{ matrix.configuration }}.csv
+          if-no-files-found: ignore
