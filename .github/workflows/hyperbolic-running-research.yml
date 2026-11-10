@@ -65,13 +65,25 @@ jobs:
             --output /tmp/pool-qtof.mzML \
             'https://zenodo.org/records/20729183/files/20171016_POOL_POS_1_105-134.mzML?download=1'
           echo '4130309a9283c8b492660dbad1fd3670  /tmp/pool-qtof.mzML' | md5sum --check
+          curl --fail --location --retry 3 --connect-timeout 10 --max-time 180 \
+            --output /tmp/pool-qtof-injection19.mzML \
+            'https://zenodo.org/records/20729183/files/20171016_POOL_POS_3_105-134.mzML?download=1'
+          echo '8bce27a1fdbe2ea0f0659d398b0bfaaf  /tmp/pool-qtof-injection19.mzML' | md5sum --check
       - name: Compare same un-interpolated profile windows, postfit both models
         run: |
           mkdir -p real-out
+          sha256sum /tmp/pool-qtof.mzML /tmp/pool-qtof-injection19.mzML > real-out/input-sha256.txt
+          printf 'Source: https://doi.org/10.5281/zenodo.20729183\nSelection: 80 evenly sampled positive MS1 scans, min apex 100, fixed u step 0.35, no resampling\n' > real-out/protocol.txt
           ./build-real/real_hyperbolic_qtof_research /tmp/pool-qtof.mzML \
-            real-out/paired-real-tripletof.csv 80 2>&1 | tee real-out/run.log
+            real-out/paired-injection1.csv 80 >real-out/injection1.log 2>&1
+          cat real-out/injection1.log
           python3 experiments/hyperbolic_running/summarize_real_qtof.py \
-            real-out/paired-real-tripletof.csv real-out/summary.json
+            real-out/paired-injection1.csv real-out/summary-injection1.json
+          ./build-real/real_hyperbolic_qtof_research /tmp/pool-qtof-injection19.mzML \
+            real-out/paired-injection19.csv 80 >real-out/injection19.log 2>&1
+          cat real-out/injection19.log
+          python3 experiments/hyperbolic_running/summarize_real_qtof.py \
+            real-out/paired-injection19.csv real-out/summary-injection19.json
       - name: Upload reproducible source-linked, measured results
         if: always()
         uses: actions/upload-artifact@v4
