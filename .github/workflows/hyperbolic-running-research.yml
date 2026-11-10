@@ -1,4 +1,4 @@
-name: Hyperbolic running research: paired qPeaks benchmark
+name: 'Hyperbolic running research: paired qPeaks benchmark'
 
 on:
   push:
