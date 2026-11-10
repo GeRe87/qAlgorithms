@@ -139,6 +139,43 @@ namespace qAlgorithms
 
     static inline double peakPosition(const RegCoeffs *c);
 
+    using LegacyModel = peak_model::Model<PeakModelKind::PiecewiseQuadratic>;
+
+    int32_t qpeaks_find(const float *intensity, const float *x, const uint16_t *df,
+        size_t length, std::vector<RegressionGauss> *result,
+        const PeakFitOptions &options, std::vector<UnresolvedPeak> *groups)
+    {
+        switch (options.model)
+        {
+        case PeakModelKind::PiecewiseQuadratic:
+            return qpeaks_find(intensity, x, df, length, result, groups);
+        case PeakModelKind::Hyperbolic:
+            throw std::invalid_argument("Hyperbolic peak model is unsupported in production during Stage A");
+        default:
+            throw std::invalid_argument("Unknown peak model");
+        }
+    }
+
+    namespace peak_model
+    {
+        PeakProperties fromLegacy(const RegressionGauss &r, AxisUnit units)
+        {
+            return {r.position, r.height, r.fwhm, r.area,
+                r.position_unc, r.height_unc, r.area_unc, r.isValid, units};
+        }
+        double Model<PeakModelKind::PiecewiseQuadratic>::logValue(const Coefficients *c, double x) { return regAt(c, x); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::refitAmplitude(const float *y, Span_i32 span, float *predicted, Coefficients *c)
+        { return correctB0(y, span, predicted, c); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::apex(const Coefficients *c) { return peakPosition(c); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::width(const Coefficients *c, double h, double step) { return fullWidthHalfMax(c, h, step); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::integral(const Coefficients *c, double step, double mse, double *u) { return peakArea(c, step, mse, u); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::positionUncertainty(const Coefficients *c, double mse) { return peakPositionUncert(c, mse); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::heightUncertainty(const Coefficients *c, double mse) { return peakHeightUncert(c, mse); }
+        double Model<PeakModelKind::PiecewiseQuadratic>::covarianceProjection(const double j[4], size_t scale) { return matProductReg(j, scale); }
+        bool Model<PeakModelKind::PiecewiseQuadratic>::apexHasSupport(float position, const Coefficients *c)
+        { return !((int32_t)abs(position) + 2 > c->scale); }
+    }
+
     const double minIntensity_global = 2.7182818284590452; // exp(1) == e
 
     // -------------------------------------- //
@@ -155,7 +192,7 @@ namespace qAlgorithms
         reg->position = x_values[leftOfApex] + apexFraction;
         reg->position_unc *= delta_x;
 
-        reg->fwhm = (float)fullWidthHalfMax(&reg->coeffs, reg->height, delta_x);
+        reg->fwhm = (float)LegacyModel::width(&reg->coeffs, reg->height, delta_x);
 
         reg->dqs = erfc(reg->area_unc / reg->area);
     }
@@ -307,7 +344,7 @@ namespace qAlgorithms
             // height correction changes its intercept and is not a log-domain
             // least-squares estimate; do not use that correction as log noise.
             const double RSS_log = calcRSS_log(&reg, intensities_log);
-            correctB0(intensities, span, predict.data(), &reg.coeffs);
+            LegacyModel::refitAmplitude(intensities, span, predict.data(), &reg.coeffs);
 
             invalid failpoint = calcRegressionProperties(
                 intensities,
@@ -347,7 +384,7 @@ namespace qAlgorithms
         // coefficients for single-b0 peaks, spans all regressions over a peak window
         // all entries in coeff are sorted by scale and position in ascending order - this is not checked!
         std::vector<RegCoeffs> coefficients;
-        findCoefficients(intensities_log, length, &coefficients);
+        LegacyModel::runningFit(intensities_log, length, &coefficients);
 
         std::vector<RegressionGauss> validRegressions; // all independently valid regressions regressions
         validRegressions.reserve(coefficients.size() / 2);
@@ -2145,10 +2182,10 @@ namespace qAlgorithms
         // multiply with matrix U, where first four terms are partial derivative of equation in
         // correctB0 by original coefficients
 
-        float position = (float)peakPosition(coeffs);
+        float position = (float)LegacyModel::apex(coeffs);
         // to prevent potential errors, reject those regressions which do not have the apex in the
         // regression window with at least one point tp the side.
-        if ((int32_t)abs(position) + 2 > coeffs->scale)
+        if (!LegacyModel::apexHasSupport(position, coeffs))
         {
             return invalid_apex;
         }
@@ -2188,9 +2225,9 @@ namespace qAlgorithms
 
         // uncertainty calculation and t-tests against peak properties
 
-        float uncert_position = (float)peakPositionUncert(coeffs, mse_log);
+        float uncert_position = (float)LegacyModel::positionUncertainty(coeffs, mse_log);
         mutateReg->position_unc = uncert_position;
-        float uncert_height = (float)peakHeightUncert(coeffs, mse_log);
+        float uncert_height = (float)LegacyModel::heightUncertainty(coeffs, mse_log);
         mutateReg->height_unc = uncert_height;
 
         const float absolutePosition = (float)coeffs->x0 + position;
@@ -2199,7 +2236,7 @@ namespace qAlgorithms
         size_t leftOfApex = (size_t)absolutePosition;
         float delta_x = x_axis[leftOfApex + 1] - x_axis[leftOfApex];
         double uncertainty = -1;
-        mutateReg->area = (float)peakArea(coeffs, delta_x, mse_log, &uncertainty);
+        mutateReg->area = (float)LegacyModel::integral(coeffs, delta_x, mse_log, &uncertainty);
         mutateReg->area_unc = (float)uncertainty;
 
         // Area has intensity * axis units. A fixed numeric cutoff here changes

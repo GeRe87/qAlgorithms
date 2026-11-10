@@ -69,6 +69,53 @@ namespace qAlgorithms
         std::vector<RegressionGauss> *result,
         std::vector<UnresolvedPeak> *unresolvedGroups = nullptr);
 
+    enum class PeakModelKind { PiecewiseQuadratic, Hyperbolic };
+    struct PeakFitOptions
+    {
+        PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
+    };
+
+    // Selection is checked before input processing or result mutation.
+    // Hyperbolic (and unknown enum values) throw std::invalid_argument in Stage A.
+    int32_t qpeaks_find(const float *intensity, const float *x,
+        const uint16_t *df, size_t length, std::vector<RegressionGauss> *result,
+        const PeakFitOptions &options, std::vector<UnresolvedPeak> *groups = nullptr);
+
+    namespace peak_model
+    {
+        // Units are supplied explicitly: the adapter cannot infer m/z versus RT.
+        enum class AxisUnit { SampleIndex, MassToCharge, RetentionTime, CallerDefined };
+        struct PeakProperties
+        {
+            double position, height, width, area;
+            double positionUncertainty, heightUncertainty, areaUncertainty;
+            bool valid;
+            AxisUnit axisUnit; // width/position: axis; area: intensity*axis
+            // Height and its uncertainty retain the caller's intensity unit.
+        };
+        PeakProperties fromLegacy(const RegressionGauss &, AxisUnit);
+
+        // Intentionally incomplete primary trait: unsupported models have no
+        // mathematical or statistical capabilities by accidental fallback.
+        template<PeakModelKind> struct Model;
+        template<> struct Model<PeakModelKind::PiecewiseQuadratic>
+        {
+            using Coefficients = RegCoeffs;
+            static void runningFit(const float *, size_t, std::vector<Coefficients> *);
+            static double logValue(const Coefficients *, double);
+            static double refitAmplitude(const float *, Span_i32, float *, Coefficients *);
+            static double apex(const Coefficients *);
+            static double width(const Coefficients *, double height, double step);
+            static double integral(const Coefficients *, double step, double mse, double *uncertainty);
+            static double positionUncertainty(const Coefficients *, double mse);
+            static double heightUncertainty(const Coefficients *, double mse);
+            static double covarianceProjection(const double gradient[4], size_t scale);
+            // Legacy interior-apex gate; integrability is handled by the legacy
+            // closed integral, which also supports its historical mixed tails.
+            static bool apexHasSupport(float position, const Coefficients *);
+        };
+    }
+
     struct XML_File;                           // forward declaration so at least the header does not couple with read_file
     size_t findCentroids(const XML_File *data, // @todo the internal file representation should be more generic
                          const std::vector<uint32_t> *selectedIndices,
@@ -330,6 +377,11 @@ namespace qAlgorithms
     // Note that no more than seven different values are needed per scale, even for a multidimensional approach.
     // A1 and A2 are derived from the existing cached A, the scale's n=2*scale+1,
     // and the runtime trace count; no second precomputed cache is necessary.
+    inline void peak_model::Model<PeakModelKind::PiecewiseQuadratic>::runningFit(
+        const float *y, size_t n, std::vector<Coefficients> *out)
+    {
+        findCoefficients(y, n, out);
+    }
 } // namespace qAlgorithms
 
 #endif
