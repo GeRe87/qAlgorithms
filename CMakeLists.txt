@@ -220,3 +220,7 @@ if(QALGORITHMS_ENABLE_HYPERBOLIC_RESEARCH)
                  COMMAND test_hyperbolic_running_research)
     endif()
 endif()
+
+if(BUILD_TESTING)
+    target_compile_definitions(test_peak_model PRIVATE STAGE_A)
+endif()
