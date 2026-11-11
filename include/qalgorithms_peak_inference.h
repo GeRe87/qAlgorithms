@@ -81,6 +81,11 @@ namespace qAlgorithms
             double fixedStep,
             const HyperbolicInferenceOptions &options = {});
 
+        // Reuse geometry across windows with the same fixed step.
+        HyperbolicInference inferHyperbolicWindow(
+            const std::vector<const float *> &rawTraces, size_t length, size_t center, size_t scale,
+            const HyperbolicModel::Geometry &cache, const HyperbolicInferenceOptions &options = {});
+
         struct AffinePeakCoordinates
         {
             double origin = 0;       // physical coordinate of window center

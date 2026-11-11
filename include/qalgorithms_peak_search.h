@@ -2,6 +2,7 @@
 #define QALGORITHMS_PEAK_SEARCH_H
 
 #include "qalgorithms_peak_inference.h"
+#include "qalgorithms_intensity_segments.h"
 
 namespace qAlgorithms
 {
@@ -53,6 +54,15 @@ namespace qAlgorithms
             std::vector<UnresolvedSearchGroup> unresolvedGroups;
         };
 
+        enum class SegmentedWindowStatus { outsideEligibleSpan, evaluated };
+
+        struct SegmentedHyperbolicSearchResult
+        {
+            HyperbolicSearchResult search;
+            IntensitySegments segmentation;
+            std::vector<SegmentedWindowStatus> windowStatus;
+        };
+
         // A data-independent, fixed family of windows, canonicalized by center
         // then scale. Configure before observing raw data; adaptive construction
         // cannot acquire calibration merely by declaring 'prespecified'.
@@ -73,6 +83,12 @@ namespace qAlgorithms
             // Covariance is the fixed-window reference only: selecting a result
             // does not give post-selection confidence intervals or area coverage.
             HyperbolicSearchResult evaluate(const std::vector<const float *> &rawTraces) const;
+
+            // Original indices address the supplied coordinate arrays. Threshold
+            // selection yields exploratory inference over the complete family.
+            SegmentedHyperbolicSearchResult evaluateSegmented(const std::vector<AlignedIntensityTrace> &traces,
+                double coordinateStep, double relativeTolerance = 0,
+                double threshold = 2.7182818284590452) const;
 
         private:
             size_t length_;
