@@ -4,6 +4,8 @@
 #include "qalgorithms_peak_inference.h"
 #include "qalgorithms_intensity_segments.h"
 
+#include <variant>
+
 namespace qAlgorithms
 {
     namespace peak_model
@@ -75,6 +77,7 @@ namespace qAlgorithms
                                  const HyperbolicSearchOptions &options = {});
 
             const std::vector<PeakSearchWindow> &windows() const;
+            size_t length() const;
             size_t familySize() const;
 
             // Validate ALL traces before fitting. Every declared window remains
@@ -107,6 +110,31 @@ namespace qAlgorithms
             size_t maxScale,
             size_t centerStride = 1,
             const HyperbolicSearchOptions &options = {});
+
+        struct PiecewiseQuadraticSearchResult
+        {
+            int32_t status = 0; // qpeaks_find return value
+            std::vector<RegressionGauss> peaks;
+            std::vector<UnresolvedPeak> unresolvedGroups;
+        };
+
+        struct PeakSearchRequest
+        {
+            PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
+            const float *intensity = nullptr;
+            size_t length = 0;
+            const float *coordinates = nullptr; // piecewise-quadratic only
+            const uint16_t *degreesOfFreedom = nullptr; // cumulative, piecewise-quadratic only
+            bool describeUnresolved = false; // piecewise-quadratic only
+            const HyperbolicSearchPlan *hyperbolicPlan = nullptr;
+        };
+
+        // Single-trace search. The quadratic branch uses the legacy selection.
+        // Hyperbolic requires a matching plan and positive finite intensities.
+        // It returns the complete window family and any conditional candidates
+        // and overlap groups, with fit quantities in the plan's u coordinates.
+        using ModelPeakSearchResult = std::variant<PiecewiseQuadraticSearchResult, HyperbolicSearchResult>;
+        ModelPeakSearchResult findPeaks(const PeakSearchRequest &request);
     }
 }
 

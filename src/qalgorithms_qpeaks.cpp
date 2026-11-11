@@ -3,6 +3,7 @@
 #include "qalgorithms_logging.h"
 #include "qalgorithms_read_file.h"
 #include "qalgorithms_utils.h"
+#include "detail/qalgorithms_peak_candidates.h"
 
 #include "libcerf_reduced.h"
 
@@ -309,9 +310,10 @@ namespace qAlgorithms
     {
         size_t validCount = 0;
         std::vector<float> predict(length, 0);
-        for (size_t i = 0; i < coefficients->size(); i++)
+        detail::findValidRegressions<RegressionGauss>(*coefficients,
+            [&](const RegCoeffs &input, RegressionGauss *reg)
         {
-            const RegCoeffs *coeffs = coefficients->data() + i;
+            const RegCoeffs *coeffs = &input;
             // sets the range and checks for validity
             Span_i32 span = calcRegSpan(coeffs);
             assert(span.startIdx >= 0);
@@ -319,17 +321,16 @@ namespace qAlgorithms
                              (span.startIdx + 2 > (int32_t)coeffs->x0) ||
                              (span.endIdx() - 2 < (int32_t)coeffs->x0);
             if (span_fail)
-                continue;
+                return false;
 
             size_t df_sum = sumOfCumulative(degreesOfFreedom_cum, span.startIdx, span.length);
             if (df_sum < MINLENGTH)
-                continue;
+                return false;
 
             df_sum -= 4; // four coefficients, adjust for components
 
-            RegressionGauss reg;
-            reg.coeffs = *coeffs;
-            reg.span = span;
+            reg->coeffs = *coeffs;
+            reg->span = span;
 
             /*
                 Adjustment of b0 coefficient:
@@ -343,8 +344,8 @@ namespace qAlgorithms
             // Statistical tests use the log-domain fit. The raw-intensity
             // height correction changes its intercept and is not a log-domain
             // least-squares estimate; do not use that correction as log noise.
-            const double RSS_log = calcRSS_log(&reg, intensities_log);
-            LegacyModel::refitAmplitude(intensities, span, predict.data(), &reg.coeffs);
+            const double RSS_log = calcRSS_log(reg, intensities_log);
+            LegacyModel::refitAmplitude(intensities, span, predict.data(), &reg->coeffs);
 
             invalid failpoint = calcRegressionProperties(
                 intensities,
@@ -354,14 +355,16 @@ namespace qAlgorithms
                 df_sum,
                 length,
                 RSS_log,
-                &reg);
-
-            validCount += failpoint == ok ? 1 : 0;
-            if (failpoint == ok)
+                reg);
+            return failpoint == ok;
+        }, [&](const RegressionGauss &reg, bool valid)
+        {
+            if (valid)
             {
+                ++validCount;
                 validRegressions->push_back(reg);
             }
-        }
+        });
         assert(validCount == validRegressions->size());
 
         return validCount;

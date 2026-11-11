@@ -21,6 +21,83 @@ namespace
         }
     }
 
+    void testModelDispatch()
+    {
+        constexpr size_t length = 41;
+        std::vector<float> raw(length), coordinates(length);
+        for (size_t i = 0; i < length; ++i)
+        {
+            const double u = .2 * (static_cast<double>(i) - 20);
+            raw[i] = static_cast<float>(5 + 800 * std::exp(-u * u / 2) * (1 + .01 * std::sin(2 * u)));
+            coordinates[i] = static_cast<float>(100 + .03 * i);
+        }
+        PeakSearchRequest request;
+        request.intensity = raw.data();
+        request.coordinates = coordinates.data();
+        request.length = length;
+        for (bool collective : {false, true})
+        {
+            request.describeUnresolved = collective;
+            std::vector<RegressionGauss> peaks;
+            std::vector<UnresolvedPeak> groups;
+            const auto count = qpeaks_find(raw.data(), coordinates.data(), nullptr, length, &peaks,
+                collective ? &groups : nullptr);
+            const auto result = std::get<PiecewiseQuadraticSearchResult>(findPeaks(request));
+            require(count > 0 && count == result.status && peaks.size() == result.peaks.size(),
+                "Default model uses the quadratic detector");
+            require(groups.size() == result.unresolvedGroups.size(), "Legacy group reporting retained");
+            for (size_t i = 0; i < peaks.size(); ++i)
+            {
+                const auto &a = peaks[i];
+                const auto &b = result.peaks[i];
+                require(a.position == b.position && a.area == b.area && a.height == b.height
+                    && a.coeffs.x0 == b.coeffs.x0 && a.coeffs.scale == b.coeffs.scale && a.isValid == b.isValid,
+                    "Selected legacy results preserved in order");
+            }
+        }
+        HyperbolicSearchOptions options;
+        options.selection = WindowSelection::prespecified;
+        const HyperbolicSearchPlan plan(length, .2, {{20, 7}, {20, 8}}, options);
+        request.model = PeakModelKind::Hyperbolic;
+        request.hyperbolicPlan = &plan;
+        const auto reference = plan.evaluate({raw.data()});
+        const auto result = std::get<HyperbolicSearchResult>(findPeaks(request));
+        require(result.familySize == 2 && result.windows.size() == reference.windows.size()
+            && result.candidateIndices == reference.candidateIndices
+            && result.unresolvedGroups.size() == reference.unresolvedGroups.size(),
+            "Hyperbolic dispatch preserves the declared search result");
+        for (size_t i = 0; i < result.windows.size(); ++i)
+        {
+            const auto &a = result.windows[i];
+            const auto &b = reference.windows[i];
+            require(a.window.center == b.window.center && a.window.scale == b.window.scale
+                && a.inference.status == b.inference.status && a.inference.groupDecision == b.inference.groupDecision
+                && a.unresolvedGroup == b.unresolvedGroup, "Hyperbolic window order and decisions retained");
+        }
+        --request.length;
+        bool threw = false;
+        try
+        {
+            (void)findPeaks(request);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+        require(threw, "Mismatched hyperbolic plan rejected");
+        request.model = static_cast<PeakModelKind>(99);
+        threw = false;
+        try
+        {
+            (void)findPeaks(request);
+        }
+        catch (const std::invalid_argument &)
+        {
+            threw = true;
+        }
+        require(threw, "Unknown peak model rejected");
+    }
+
     std::vector<std::vector<size_t>> referenceGroups(const HyperbolicSearchResult &result)
     {
         // Independent all-pairs overlap graph + traversal, rather than the
@@ -273,6 +350,7 @@ int main()
 {
     try
     {
+        testModelDispatch();
         testFamilyAndAmbiguity();
         testTransitiveAndTouchingOverlap();
         testPlanValidationAndGrid();

@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_search.h"
+#include "detail/qalgorithms_peak_candidates.h"
 
 #include <algorithm>
 #include <cmath>
@@ -123,6 +124,11 @@ namespace qAlgorithms
             return familySize_;
         }
 
+        size_t HyperbolicSearchPlan::length() const
+        {
+            return length_;
+        }
+
         HyperbolicSearchResult HyperbolicSearchPlan::evaluate(const std::vector<const float *> &rawTraces) const
         {
             if (rawTraces.empty())
@@ -155,18 +161,20 @@ namespace qAlgorithms
             result.options = options_;
             result.familySize = familySize_;
             result.windows.reserve(windows_.size());
-            for (const auto &window : windows_)
+            detail::findValidRegressions<PeakSearchResult>(windows_,
+                [&](const PeakSearchWindow &window, PeakSearchResult *entry)
             {
-                PeakSearchResult entry;
-                entry.window = window;
-                entry.inference = inferHyperbolicWindow(rawTraces, length_, window.center, window.scale, fixedStep_, inferenceOptions);
-                const size_t index = result.windows.size();
-                if (entry.inference.groupDecision == ConditionalDecision::passed)
+                entry->window = window;
+                entry->inference = inferHyperbolicWindow(rawTraces, length_, window.center, window.scale, fixedStep_, inferenceOptions);
+                return entry->inference.groupDecision == ConditionalDecision::passed;
+            }, [&](PeakSearchResult &entry, bool valid)
+            {
+                if (valid)
                 {
-                    result.candidateIndices.push_back(index);
+                    result.candidateIndices.push_back(result.windows.size());
                 }
                 result.windows.push_back(std::move(entry));
-            }
+            });
             collectUnresolvedGroups(&result);
             return result;
         }
@@ -257,6 +265,27 @@ namespace qAlgorithms
                 center += centerStride;
             }
             return HyperbolicSearchPlan(length, fixedStep, std::move(windows), options);
+        }
+
+        ModelPeakSearchResult findPeaks(const PeakSearchRequest &request)
+        {
+            switch (request.model)
+            {
+            case PeakModelKind::PiecewiseQuadratic:
+            {
+                PiecewiseQuadraticSearchResult result;
+                result.status = qpeaks_find(request.intensity, request.coordinates, request.degreesOfFreedom,
+                    request.length, &result.peaks, request.describeUnresolved ? &result.unresolvedGroups : nullptr);
+                return result;
+            }
+            case PeakModelKind::Hyperbolic:
+                if (request.hyperbolicPlan == nullptr || request.hyperbolicPlan->length() != request.length)
+                {
+                    throw std::invalid_argument("Hyperbolic search requires a plan matching the trace length");
+                }
+                return request.hyperbolicPlan->evaluate({request.intensity});
+            }
+            throw std::invalid_argument("Unknown peak model");
         }
     }
 }
