@@ -7,18 +7,83 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <numeric>
 #include <stdexcept>
+#include <utility>
 
 using namespace qAlgorithms;
 using namespace qAlgorithms::peak_model;
+
+static void compareModels(size_t scan, const std::vector<float> &raw,
+    const SegmentedHyperbolicSearchResult &hyperbolic, std::ostream &spans, std::ostream &peaks)
+{
+    std::vector<float> sampleIndices(raw.size());
+    std::iota(sampleIndices.begin(), sampleIndices.end(), 0.0f);
+    std::vector<std::pair<double, size_t>> apices;
+    for (size_t index : hyperbolic.diagnosticIndices)
+    {
+        const auto &entry = hyperbolic.search.windows[index];
+        const double apex = static_cast<double>(entry.window.center) + entry.inference.properties.front().apexU.value
+            / hyperbolic.search.fixedStep;
+        apices.emplace_back(apex, index);
+    }
+    std::sort(apices.begin(), apices.end());
+    for (const auto &span : hyperbolic.segmentation.spans)
+    {
+        if (span.status != IntensitySpanStatus::eligible)
+        {
+            continue;
+        }
+        const auto first = std::lower_bound(apices.begin(), apices.end(),
+            std::pair<double, size_t>{static_cast<double>(span.start), 0});
+        const auto last = std::lower_bound(first, apices.end(),
+            std::pair<double, size_t>{static_cast<double>(span.end), 0});
+        const auto groups = std::count_if(hyperbolic.diagnosticGroups.begin(), hyperbolic.diagnosticGroups.end(),
+            [&](const auto &group) { return group.start >= span.start && group.end < span.end; });
+        spans << scan << ',' << span.start << ',' << span.end << ',' << last - first << ',' << groups << ',';
+        PeakSearchRequest request;
+        request.intensity = raw.data() + span.start;
+        request.coordinates = sampleIndices.data() + span.start;
+        request.length = span.end - span.start;
+        try
+        {
+            const auto quadratic = std::get<PiecewiseQuadraticSearchResult>(findPeaks(request));
+            spans << quadratic.status << ',' << quadratic.peaks.size() << ",\n";
+            for (const auto &peak : quadratic.peaks)
+            {
+                peaks << scan << ',' << span.start << ',' << span.end << ',' << peak.position << ',';
+                if (first != last)
+                {
+                    const auto nearest = std::min_element(first, last, [&](const auto &a, const auto &b)
+                    {
+                        return std::abs(a.first - peak.position) < std::abs(b.first - peak.position);
+                    });
+                    const auto &window = hyperbolic.search.windows[nearest->second].window;
+                    peaks << nearest->first << ',' << nearest->first - peak.position << ',' << window.center << ',' << window.scale;
+                }
+                else
+                {
+                    peaks << ",,,";
+                }
+                peaks << '\n';
+            }
+        }
+        catch (const std::runtime_error &error)
+        {
+            // The legacy selector can reject a whole span when its candidate
+            // constraints cannot be satisfied. Keep it in the denominator.
+            spans << ",,\"" << error.what() << "\"\n";
+        }
+    }
+}
 
 int main(int argc, char **argv)
 {
     try
     {
-        if (argc != 4)
+        if (argc != 4 && argc != 6)
         {
-            throw std::invalid_argument("Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv");
+            throw std::invalid_argument("Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv [SPANS.csv PEAKS.csv]");
         }
         const std::filesystem::path input(argv[1]);
         XML_File file(input.c_str(), mzML);
@@ -28,6 +93,15 @@ int main(int argc, char **argv)
             throw std::runtime_error("Missing profile MS1 data");
         }
         std::ofstream summary(argv[2]), windows(argv[3]);
+        std::ofstream comparisonSpans, comparisonPeaks;
+        if (argc == 6)
+        {
+            comparisonSpans.open(argv[4]);
+            comparisonPeaks.open(argv[5]);
+            comparisonSpans << "scan,start,end,hyperbolic_windows,hyperbolic_groups,quadratic_status,quadratic_peaks,error\n";
+            comparisonPeaks << "scan,start,end,quadratic_apex,hyperbolic_apex,delta,center,scale\n";
+            comparisonPeaks.precision(17);
+        }
         summary << "scan,points,zeros,positive_below_threshold,segments,eligible_segments,short_segments,"
                    "eligible_points,coordinate_breaks,declared,fitted,available,finite_coefficients,integrable,"
                    "segment_us,logs_us,running_us,search_us\n";
@@ -99,8 +173,19 @@ int main(int argc, char **argv)
                 });
             }
             const auto afterRunning = Clock::now();
-            const auto result = plan.evaluateSegmented(traces, coordinateStep, .45);
+            PeakSearchRequest request;
+            request.model = PeakModelKind::Hyperbolic;
+            request.intensity = raw.data();
+            request.length = raw.size();
+            request.hyperbolicPlan = &plan;
+            const PeakSearchRequest::Segmentation segmentation{coordinates.data(), coordinateStep, .45, threshold};
+            request.segmentation = &segmentation;
+            const auto result = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
             const auto afterSearch = Clock::now();
+            if (argc == 6)
+            {
+                compareModels(scan, raw, result, comparisonSpans, comparisonPeaks);
+            }
             size_t fitted = 0, available = 0;
             for (size_t i = 0; i < result.search.windows.size(); ++i)
             {
@@ -129,7 +214,12 @@ int main(int argc, char **argv)
         }
         summary.close();
         windows.close();
-        if (!summary || !windows)
+        if (argc == 6)
+        {
+            comparisonSpans.close();
+            comparisonPeaks.close();
+        }
+        if (!summary || !windows || !comparisonSpans || !comparisonPeaks)
         {
             throw std::runtime_error("Incomplete segment evidence");
         }

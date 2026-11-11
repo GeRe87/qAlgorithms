@@ -63,6 +63,10 @@ namespace qAlgorithms
             HyperbolicSearchResult search;
             IntensitySegments segmentation;
             std::vector<SegmentedWindowStatus> windowStatus;
+            // Exploratory fits with sufficient support and an integrable shape.
+            // Indices address search.windows; groups are inclusive sample envelopes.
+            std::vector<size_t> diagnosticIndices;
+            std::vector<UnresolvedSearchGroup> diagnosticGroups;
         };
 
         // A data-independent, fixed family of windows, canonicalized by center
@@ -127,13 +131,23 @@ namespace qAlgorithms
             const uint16_t *degreesOfFreedom = nullptr; // cumulative, piecewise-quadratic only
             bool describeUnresolved = false; // piecewise-quadratic only
             const HyperbolicSearchPlan *hyperbolicPlan = nullptr;
+            struct Segmentation
+            {
+                const double *coordinates = nullptr;
+                double coordinateStep = 0;
+                double relativeTolerance = 0;
+                double threshold = 2.7182818284590452;
+            };
+            const Segmentation *segmentation = nullptr; // optional, Hyperbolic only
         };
 
         // Single-trace search. The quadratic branch uses the legacy selection.
-        // Hyperbolic requires a matching plan and positive finite intensities.
-        // It returns the complete window family and any conditional candidates
-        // and overlap groups, with fit quantities in the plan's u coordinates.
-        using ModelPeakSearchResult = std::variant<PiecewiseQuadraticSearchResult, HyperbolicSearchResult>;
+        // Hyperbolic requires a matching plan. Without segmentation it requires
+        // positive finite intensities. With segmentation the result is exploratory.
+        // Windows use original sample indices; fit quantities use the plan's u
+        // coordinates. An apex maps to center + apexU / fixedStep in sample space.
+        using ModelPeakSearchResult = std::variant<PiecewiseQuadraticSearchResult, HyperbolicSearchResult,
+            SegmentedHyperbolicSearchResult>;
         ModelPeakSearchResult findPeaks(const PeakSearchRequest &request);
     }
 }
