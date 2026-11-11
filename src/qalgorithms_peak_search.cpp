@@ -17,13 +17,15 @@ namespace qAlgorithms
                 return left.center < right.center || (left.center == right.center && left.scale < right.scale);
             }
 
-            void collectUnresolvedGroups(HyperbolicSearchResult *result)
+            std::vector<UnresolvedSearchGroup> collectUnresolvedGroups(
+                const std::vector<PeakSearchResult> &windows, const std::vector<size_t> &indices)
             {
-                std::vector<size_t> order = result->candidateIndices;
+                std::vector<UnresolvedSearchGroup> groups;
+                std::vector<size_t> order = indices;
                 std::sort(order.begin(), order.end(), [&](size_t left, size_t right)
                 {
-                    const auto &a = result->windows[left].window;
-                    const auto &b = result->windows[right].window;
+                    const auto &a = windows[left].window;
+                    const auto &b = windows[right].window;
                     const size_t startA = a.center - a.scale, startB = b.center - b.scale;
                     return startA < startB || (startA == startB && left < right);
                 });
@@ -33,13 +35,13 @@ namespace qAlgorithms
                     if (group.windowIndices.size() > 1)
                     {
                         std::sort(group.windowIndices.begin(), group.windowIndices.end());
-                        result->unresolvedGroups.push_back(std::move(group));
+                        groups.push_back(std::move(group));
                     }
                     group = {};
                 };
                 for (size_t index : order)
                 {
-                    const auto &window = result->windows[index].window;
+                    const auto &window = windows[index].window;
                     const size_t start = window.center - window.scale, end = window.center + window.scale;
                     if (!group.windowIndices.empty() && start > group.end)
                     {
@@ -57,18 +59,12 @@ namespace qAlgorithms
                     group.windowIndices.push_back(index);
                 }
                 appendGroup();
-                std::sort(result->unresolvedGroups.begin(), result->unresolvedGroups.end(),
+                std::sort(groups.begin(), groups.end(),
                     [](const UnresolvedSearchGroup &left, const UnresolvedSearchGroup &right)
                 {
                     return left.windowIndices.front() < right.windowIndices.front();
                 });
-                for (size_t i = 0; i < result->unresolvedGroups.size(); ++i)
-                {
-                    for (size_t index : result->unresolvedGroups[i].windowIndices)
-                    {
-                        result->windows[index].unresolvedGroup = i;
-                    }
-                }
+                return groups;
             }
         }
 
@@ -175,7 +171,14 @@ namespace qAlgorithms
                 }
                 result.windows.push_back(std::move(entry));
             });
-            collectUnresolvedGroups(&result);
+            result.unresolvedGroups = collectUnresolvedGroups(result.windows, result.candidateIndices);
+            for (size_t i = 0; i < result.unresolvedGroups.size(); ++i)
+            {
+                for (size_t index : result.unresolvedGroups[i].windowIndices)
+                {
+                    result.windows[index].unresolvedGroup = i;
+                }
+            }
             return result;
         }
 
@@ -230,10 +233,15 @@ namespace qAlgorithms
                 {
                     entry.inference = inferHyperbolicWindow(raw, length_, window.center, window.scale, cache, inferenceOptions);
                     status = SegmentedWindowStatus::evaluated;
+                    if (entry.inference.status == InferenceStatus::available && entry.inference.observedSupportSufficient)
+                    {
+                        result.diagnosticIndices.push_back(search.windows.size());
+                    }
                 }
                 search.windows.push_back(std::move(entry));
                 result.windowStatus.push_back(status);
             }
+            result.diagnosticGroups = collectUnresolvedGroups(search.windows, result.diagnosticIndices);
             return result;
         }
 
@@ -282,6 +290,13 @@ namespace qAlgorithms
                 if (request.hyperbolicPlan == nullptr || request.hyperbolicPlan->length() != request.length)
                 {
                     throw std::invalid_argument("Hyperbolic search requires a plan matching the trace length");
+                }
+                if (request.segmentation != nullptr)
+                {
+                    const auto &segmentation = *request.segmentation;
+                    return request.hyperbolicPlan->evaluateSegmented(
+                        {{request.intensity, segmentation.coordinates, request.length}},
+                        segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold);
                 }
                 return request.hyperbolicPlan->evaluate({request.intensity});
             }

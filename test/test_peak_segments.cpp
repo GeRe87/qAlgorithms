@@ -140,6 +140,42 @@ int main()
         const auto gap = plan.evaluateSegmented({{positive.data(), x.data(), 23}}, 1);
         require(gap.segmentation.coordinateBreaks == std::vector<size_t>{11}
             && gap.windowStatus[1] == SegmentedWindowStatus::outsideEligibleSpan, "No fit across a coordinate gap");
+
+        // Exercise the common entry point with an offset peak, zeros and a
+        // coordinate break inside the positive span.
+        std::iota(x.begin(), x.end(), 0.0);
+        for (size_t i = 17; i < x.size(); ++i)
+        {
+            x[i] += 2;
+        }
+        const HyperbolicSearchPlan dispatchPlan(23, .2, {{11, 4}, {11, 5}, {15, 3}}, options);
+        const PeakSearchRequest::Segmentation segmentation{x.data(), 1};
+        PeakSearchRequest request;
+        request.model = PeakModelKind::Hyperbolic;
+        request.intensity = b.data();
+        request.length = b.size();
+        request.hyperbolicPlan = &dispatchPlan;
+        request.segmentation = &segmentation;
+        // The wider window starts at sample 6. Restore that observation so
+        // both fits describe the same positive span before the break.
+        b[6] = static_cast<float>(std::exp(9 - .3 - 2.2 * std::cosh(1.0) + .15 * std::sinh(1.0)));
+        const auto dispatched = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
+        require(dispatched.search.options.selection == WindowSelection::exploratory
+            && dispatched.search.candidateIndices.empty() && dispatched.search.unresolvedGroups.empty()
+            && dispatched.search.familySize == 9, "Adaptive segmentation retains exploratory inference");
+        require(dispatched.windowStatus[2] == SegmentedWindowStatus::outsideEligibleSpan
+            && dispatched.diagnosticIndices == std::vector<size_t>{0, 1}
+            && dispatched.diagnosticGroups.size() == 1, "Supported overlapping fits are retained as diagnostics");
+        const auto &group = dispatched.diagnosticGroups.front();
+        require(group.start == 6 && group.end == 16 && group.windowIndices == std::vector<size_t>{0, 1},
+            "Diagnostic group refers to original samples and canonical windows");
+        for (size_t index : group.windowIndices)
+        {
+            const auto &entry = dispatched.search.windows[index];
+            const auto &apex = entry.inference.properties.front().apexU;
+            require(apex.status == PropertyStatus::Available && std::abs(entry.window.center + apex.value / .2 - 11) < 1,
+                "Apex can be mapped back to the original sample grid");
+        }
     }
     catch (const std::exception &error)
     {
