@@ -60,7 +60,7 @@ Selection by observed intensities is exploratory even for a prespecified plan.
 The effective selection mode is reported in search.options. Nominal statistics
 and covariance retain their fixed-window interpretation. Bonferroni uses the
 whole declared family. Post-selection coverage, the physical meaning of zeros,
-actual instrument error, tail adequacy and true areas require separate evidence.
+actual instrument error and tail adequacy require separate evidence.
 
 ## Numerical and real-profile evidence
 
@@ -96,7 +96,27 @@ audit by original scan, center and scale retains all 933 and 1,094 previously
 eligible cohort records, with exact agreement of integrability and Stage C
 availability. A window can be recorded in both audit cohorts. The larger full
 search uses more centers and widths, so these counts represent fits rather than
-distinct peaks. The wider study establishes no independent area accuracy.
+distinct peaks.
+
+### Interpreting area comparisons
+
+For these TripleTOF profiles the true peak areas are unknown. An independent
+numerical quadrature of the same fitted function over the same domain can check
+the analytic integral. Agreement verifies that calculation for the fitted
+shape in dimensionless u.
+
+Quadrature of the observed intensities over their actual coordinates provides
+a descriptive area over the observed window. Its value depends on the window,
+background and handling of sampling gaps. A comparison with the model needs
+the same interval, coordinate units and background convention. The whole-line
+fit additionally includes extrapolated tails. Comparing the fitted integral
+over the observed interval with the whole-line integral separates that tail
+contribution within the model.
+
+Simulated profiles with known integrals can quantify recovery under specified
+sampling, noise and shape assumptions. For the real profiles, report agreement
+over the observed interval and sensitivity to the window and tails. Absolute
+area error on these spectra is unidentifiable from the available observations.
 
 ## Performance and reproducibility
 
