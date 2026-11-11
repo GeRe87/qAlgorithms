@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace qAlgorithms
@@ -140,13 +141,13 @@ namespace qAlgorithms
             }
         }
 
-        HyperbolicInference inferHyperbolicWindow(
+        static HyperbolicInference inferWindow(
             const std::vector<const float *> &rawTraces,
             size_t length,
             size_t center,
             size_t scale,
             double fixedStep,
-            const HyperbolicInferenceOptions &options)
+            const HyperbolicInferenceOptions &options, const HyperbolicModel::Geometry *prepared)
         {
             if (rawTraces.empty() || center >= length || scale < 2 || scale > center || scale > length - 1 - center
                 || options.familySize == 0 || !(options.familyAlpha > 0 && options.familyAlpha < 1)
@@ -166,7 +167,12 @@ namespace qAlgorithms
             {
                 throw std::invalid_argument("Inference trace count overflow");
             }
-            hyperbolic::GeometryCache cache(scale, fixedStep);
+            std::optional<hyperbolic::GeometryCache> localCache;
+            if (!prepared)
+            {
+                localCache.emplace(scale, fixedStep);
+            }
+            const auto &cache = prepared ? *prepared : *localCache;
             const auto &geometry = cache.at(scale);
             HyperbolicInference output;
             output.residualDegreesOfFreedom = traces * (count - 3) - 1;
@@ -389,6 +395,20 @@ namespace qAlgorithms
                 output.covariance.clear();
             }
             return output;
+        }
+
+        HyperbolicInference inferHyperbolicWindow(
+            const std::vector<const float *> &rawTraces, size_t length, size_t center, size_t scale,
+            double fixedStep, const HyperbolicInferenceOptions &options)
+        {
+            return inferWindow(rawTraces, length, center, scale, fixedStep, options, nullptr);
+        }
+
+        HyperbolicInference inferHyperbolicWindow(
+            const std::vector<const float *> &rawTraces, size_t length, size_t center, size_t scale,
+            const HyperbolicModel::Geometry &cache, const HyperbolicInferenceOptions &options)
+        {
+            return inferWindow(rawTraces, length, center, scale, cache.step(), options, &cache);
         }
 
         MappedHyperbolicProperties mapHyperbolicAffine(

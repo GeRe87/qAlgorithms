@@ -171,6 +171,64 @@ namespace qAlgorithms
             return result;
         }
 
+        SegmentedHyperbolicSearchResult HyperbolicSearchPlan::evaluateSegmented(
+            const std::vector<AlignedIntensityTrace> &traces, double coordinateStep,
+            double relativeTolerance, double threshold) const
+        {
+            for (const auto &trace : traces)
+            {
+                if (trace.length != length_)
+                {
+                    throw std::invalid_argument("Trace length does not match declared search plan");
+                }
+            }
+            SegmentedHyperbolicSearchResult result;
+            result.segmentation = segmentIntensities(traces, coordinateStep, relativeTolerance, threshold, MINLENGTH);
+            auto &search = result.search;
+            search.length = length_;
+            search.traceCount = traces.size();
+            search.fixedStep = fixedStep_;
+            search.options = options_;
+            search.options.selection = WindowSelection::exploratory;
+            search.familySize = familySize_;
+            search.windows.reserve(windows_.size());
+            result.windowStatus.reserve(windows_.size());
+
+            const HyperbolicInferenceOptions inferenceOptions{
+                WindowSelection::exploratory, familySize_, options_.familyAlpha, options_.minimumSamplesPerSide};
+            std::vector<const float *> raw;
+            for (const auto &trace : traces)
+            {
+                raw.push_back(trace.intensity);
+            }
+            size_t maxScale = 2;
+            for (const auto &window : windows_)
+            {
+                maxScale = std::max(maxScale, window.scale);
+            }
+            const HyperbolicModel::Geometry cache(maxScale, fixedStep_);
+            auto span = result.segmentation.spans.begin();
+            for (const auto &window : windows_)
+            {
+                while (span != result.segmentation.spans.end() && span->end <= window.center)
+                {
+                    ++span;
+                }
+                PeakSearchResult entry;
+                entry.window = window;
+                auto status = SegmentedWindowStatus::outsideEligibleSpan;
+                if (span != result.segmentation.spans.end() && span->status == IntensitySpanStatus::eligible
+                    && window.center - window.scale >= span->start && window.center + window.scale < span->end)
+                {
+                    entry.inference = inferHyperbolicWindow(raw, length_, window.center, window.scale, cache, inferenceOptions);
+                    status = SegmentedWindowStatus::evaluated;
+                }
+                search.windows.push_back(std::move(entry));
+                result.windowStatus.push_back(status);
+            }
+            return result;
+        }
+
         HyperbolicSearchPlan makeUniformHyperbolicSearchPlan(
             size_t length,
             double fixedStep,
