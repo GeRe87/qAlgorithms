@@ -1,0 +1,39 @@
+name: Nested hyperbolic window audit
+on:
+  push:
+    branches: [agent/peak-model-nested-windows]
+  pull_request:
+    paths: ['experiments/peak_model_nested_windows/**', '.github/workflows/peak-model-nested-windows.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare audit environment
+        run: |
+          python3 -m venv .nested-env
+          .nested-env/bin/python -m pip install -r experiments/peak_model_area_audit/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: real-profile-segmentation-evidence
+          path: segments
+          run-id: 42999805753
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: hyperbolic-matched-area-evidence
+          path: areas
+          run-id: 43039277241
+          github-token: ${{ github.token }}
+      - name: Compare nested windows
+        run: |
+          .nested-env/bin/python -B experiments/peak_model_nested_windows/nested_windows.py segments areas results
+          git rev-parse HEAD > results/head.txt
+          cat results/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nested-hyperbolic-window-evidence
+          path: results/
