@@ -1,0 +1,35 @@
+name: Matched hyperbolic area audit
+on:
+  push:
+    branches: [agent/peak-model-area-audit]
+  pull_request:
+    paths: ['experiments/peak_model_area_audit/**', '.github/workflows/peak-model-area-audit.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare audit environment
+        run: |
+          python3 -m venv .area-env
+          .area-env/bin/python -m pip install -r experiments/peak_model_area_audit/requirements.txt
+      - name: Check quadrature and window calculations
+        run: .area-env/bin/python -B experiments/peak_model_area_audit/test_area_audit.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: real-profile-segmentation-evidence
+          path: source-evidence
+          run-id: 42999805753
+          github-token: ${{ github.token }}
+      - name: Audit the matched TripleTOF windows
+        run: |
+          .area-env/bin/python -B experiments/peak_model_area_audit/area_audit.py source-evidence results
+          git rev-parse HEAD > results/head.txt
+          cat results/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hyperbolic-matched-area-evidence
+          path: results/
