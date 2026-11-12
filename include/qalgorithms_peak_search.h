@@ -7,6 +7,8 @@
 
 #include <variant>
 #include <optional>
+#include <memory>
+#include <string>
 
 namespace qAlgorithms
 {
@@ -187,6 +189,11 @@ namespace qAlgorithms
             size_t centerStride = 1,
             const HyperbolicSearchOptions &options = {});
 
+        std::vector<PeakSearchWindow> makeUniformPeakSearchWindows(
+            size_t length, size_t minScale, size_t maxScale, size_t centerStride = 1);
+
+        class NativePeakModel;
+
         struct CandidateModelWindows
         {
             PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
@@ -195,12 +202,23 @@ namespace qAlgorithms
             std::vector<PeakSearchWindow> windows;
         };
 
+        struct NativeCandidateModelWindows
+        {
+            // The plan retains its own reference to the loaded library.
+            std::shared_ptr<const NativePeakModel> model;
+            double fixedStep = 1;
+            FullPeakCandidateOptions options;
+            std::vector<PeakSearchWindow> windows;
+        };
+
         struct CandidateSearchWindowResult
         {
-            PeakModelKind model;
+            // Native windows carry their descriptor name and no built-in enum.
+            std::optional<PeakModelKind> model;
             PeakSearchWindow window;
             FullPeakCandidateValidation validation;
             double adjustedBackgroundP = std::numeric_limits<double>::quiet_NaN();
+            std::string nativeModelName;
         };
 
         struct CandidateSearchResult
@@ -212,7 +230,8 @@ namespace qAlgorithms
         };
 
         // Prespecify all windows and models before seeing intensities. A window
-        // tested with both models counts twice. At most one entry per model.
+        // tested with two models counts twice. Each built-in kind and each
+        // native descriptor name must be unique within the plan.
         // Bonferroni applies to the raw-background stage across the full family,
         // even when windows overlap. Earlier gates can only remove rejections.
         // The guarantee assumes the fixed-window raw Gaussian null for each
@@ -224,14 +243,24 @@ namespace qAlgorithms
         public:
             // Uses familyAlpha in place of each model's background.alpha.
             // The rotation budget per model must resolve familyAlpha/familySize.
-            CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha = .05);
+            CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha = .05,
+                std::vector<NativeCandidateModelWindows> nativeModels = {});
 
             CandidateSearchResult evaluate(const float *intensities, size_t length) const;
 
         private:
             size_t length_, familySize_ = 0;
             double windowAlpha_ = 0;
-            std::vector<CandidateModelWindows> models_;
+            struct PlannedModel
+            {
+                std::optional<PeakModelKind> kind;
+                std::shared_ptr<const NativePeakModel> module;
+                std::string name;
+                double fixedStep;
+                FullPeakCandidateOptions options;
+                std::vector<PeakSearchWindow> windows;
+            };
+            std::vector<PlannedModel> models_;
         };
 
         struct PiecewiseQuadraticSearchResult

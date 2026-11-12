@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_search.h"
+#include "qalgorithms_peak_module.h"
 
 #include "cephes.h"
 
@@ -58,7 +59,7 @@ namespace
                 const auto &entry = result.windows[i];
                 const bool hyperbolic = entry.model == PeakModelKind::Hyperbolic;
                 const auto &window = entry.window;
-                const auto expected = validatePeakCandidate(entry.model, raw.data() + window.center - window.scale,
+                const auto expected = validatePeakCandidate(*entry.model, raw.data() + window.center - window.scale,
                     2 * window.scale + 1, hyperbolic ? .22 : 1., adjusted);
                 require(entry.validation.status == expected.status
                     && entry.validation.background.status == expected.background.status,
@@ -144,6 +145,29 @@ namespace
         options.background.rotations = 20;
         require(rejects({PeakModelKind::PiecewiseQuadratic, 1, options, windows}),
             "The finite rotation grid must resolve the corrected threshold");
+    }
+
+    void testNativeModelOwnership(const std::filesystem::path &path)
+    {
+        constexpr size_t length = 17;
+        std::vector<float> raw(length);
+        for (size_t i = 0; i < length; ++i)
+        {
+            const double x = static_cast<double>(i) - 8;
+            raw[i] = static_cast<float>(800 * std::exp(-.055 * x * x + .003 * std::sin(2 * x)));
+        }
+        auto alias = std::make_shared<NativePeakModel>(path);
+        FullPeakCandidateOptions options{100, .7, .05, {}};
+        const CandidateSearchPlan plan(length, {}, .05, {{alias, 1, options, {{8, 8}}}});
+        {
+            const NativePeakModel moved = std::move(*alias);
+            require(moved.name() == "external-gaussian-ols", "Test fixture moves the original wrapper");
+        }
+        alias.reset();
+        const auto result = findPeaks(plan, raw.data(), raw.size());
+        require(result.candidateIndices == std::vector<size_t>{0} && !result.windows[0].model
+            && result.windows[0].nativeModelName == "external-gaussian-ols",
+            "A declared plan pins its native module independently of caller aliases");
     }
 
     void testRawBackgroundNullFamily()
@@ -518,10 +542,15 @@ namespace
     }
 }
 
-int main()
+int main(int argc, const char *argv[])
 {
     try
     {
+        if (argc == 2)
+        {
+            testNativeModelOwnership(argv[1]);
+            return 0;
+        }
         testModelDispatch();
         testCompleteCandidateFamily();
         testRawBackgroundNullFamily();

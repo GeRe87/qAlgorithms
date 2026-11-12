@@ -9,7 +9,7 @@ import tempfile
 
 
 def main():
-    host_arg, cmake, generator, compiler, config, platform, toolset = sys.argv[1:]
+    host_arg, cmake, generator, compiler, config, platform, toolset, ownership_test = sys.argv[1:]
     host = Path(host_arg).resolve()
     original_hash = hashlib.sha256(host.read_bytes()).hexdigest()
     original_mtime = host.stat().st_mtime_ns
@@ -56,6 +56,44 @@ def main():
         assert zero["status"] == "unavailable" and zero["background"] == "notEvaluated", zero
         failed_fit = stages(run(valid, values=[".5", *samples[1:]]))
         assert failed_fit["status"] == "failed" and failed_fit["apex"] == "notEvaluated", failed_fit
+
+        def search(values, *, mixed=False, rotations=399, alpha=".05", minimum_area="100"):
+            builtin = ["--quadratic", "100", ".7"] if mixed else []
+            return subprocess.run([str(host), "--peak-model-module-search", str(valid), "1", minimum_area, ".7",
+                                   str(alpha), str(rotations), "7", "8", *builtin, *values],
+                                  capture_output=True, text=True)
+
+        def family(process):
+            assert process.returncode == 0, (process.stdout, process.stderr)
+            summary, windows = {}, []
+            for line in process.stdout.splitlines():
+                key, value = line.split("=", 1)
+                if key == "window":
+                    name, center, scale, status, background, adjusted = value.split(",")
+                    windows.append((name, int(center), int(scale), status, background, float(adjusted)))
+                else:
+                    summary[key] = float(value)
+            assert len(windows) == summary["familySize"], (summary, windows)
+            assert sum(window[3] == "passed" for window in windows) == summary["candidates"], (summary, windows)
+            return summary, windows
+
+        native_summary, native_windows = family(search(samples))
+        mixed_summary, mixed_windows = family(search(samples, mixed=True))
+        assert native_summary["familySize"] == 4 and native_summary["windowAlpha"] == .05 / 4, native_summary
+        assert mixed_summary["familySize"] == 8 and mixed_summary["windowAlpha"] == .05 / 8, mixed_summary
+        assert {row[0] for row in mixed_windows if row[3] == "passed"} == {
+            "builtin:piecewise-quadratic", "native:external-gaussian-ols"}, mixed_windows
+        assert [row[1:3] for row in native_windows] == [(7, 7), (8, 7), (8, 8), (9, 7)], native_windows
+        for solo, shared in zip(native_windows, mixed_windows[4:]):
+            assert solo[:3] == shared[:3], (solo, shared)
+            assert math.isclose(shared[-1], min(1, 2 * solo[-1])), (solo, shared)
+
+        skipped_summary, skipped_windows = family(search(["0", *samples[1:]], mixed=True))
+        assert skipped_summary["familySize"] == 8 and sum(row[3] == "unavailable" for row in skipped_windows) == 4
+        assert all(math.isnan(row[-1]) for row in skipped_windows if row[3] == "unavailable"), skipped_windows
+        budget = search(samples, mixed=True, rotations=99)
+        assert budget.returncode != 0 and "Rotation budget cannot resolve" in budget.stderr, budget
+        subprocess.run([ownership_test, str(valid)], check=True)
 
     assert hashlib.sha256(host.read_bytes()).hexdigest() == original_hash
     assert host.stat().st_mtime_ns == original_mtime

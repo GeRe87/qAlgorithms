@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_search.h"
+#include "qalgorithms_peak_module.h"
 #include "detail/qalgorithms_peak_candidates.h"
 #include "detail/qalgorithms_peak_inference.h"
 
@@ -448,13 +449,8 @@ namespace qAlgorithms
             return result;
         }
 
-        HyperbolicSearchPlan makeUniformHyperbolicSearchPlan(
-            size_t length,
-            double fixedStep,
-            size_t minScale,
-            size_t maxScale,
-            size_t centerStride,
-            const HyperbolicSearchOptions &options)
+        std::vector<PeakSearchWindow> makeUniformPeakSearchWindows(
+            size_t length, size_t minScale, size_t maxScale, size_t centerStride)
         {
             if (length < 5 || minScale < 2 || minScale > maxScale || maxScale > (length - 1) / 2 || centerStride == 0)
             {
@@ -475,25 +471,62 @@ namespace qAlgorithms
                 }
                 center += centerStride;
             }
-            return HyperbolicSearchPlan(length, fixedStep, std::move(windows), options);
+            return windows;
         }
 
-        CandidateSearchPlan::CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha)
-            : length_(length), models_(std::move(models))
+        HyperbolicSearchPlan makeUniformHyperbolicSearchPlan(
+            size_t length, double fixedStep, size_t minScale, size_t maxScale, size_t centerStride,
+            const HyperbolicSearchOptions &options)
         {
-            if (length < 5 || models_.empty() || !(familyAlpha > 0 && familyAlpha < 1))
+            return HyperbolicSearchPlan(length, fixedStep, makeUniformPeakSearchWindows(length, minScale, maxScale, centerStride), options);
+        }
+
+        CandidateSearchPlan::CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models,
+            double familyAlpha, std::vector<NativeCandidateModelWindows> nativeModels)
+            : length_(length)
+        {
+            if (length < 5 || (models.empty() && nativeModels.empty()) || !(familyAlpha > 0 && familyAlpha < 1))
             {
                 throw std::invalid_argument("Invalid candidate search family");
             }
-            std::sort(models_.begin(), models_.end(), [](const auto &a, const auto &b) { return a.model < b.model; });
+            for (auto &model : models)
+            {
+                if (model.model != PeakModelKind::PiecewiseQuadratic && model.model != PeakModelKind::Hyperbolic)
+                {
+                    throw std::invalid_argument("Unknown built-in model in candidate search family");
+                }
+                models_.push_back({model.model, nullptr, {}, model.fixedStep, model.options, std::move(model.windows)});
+            }
+            for (auto &model : nativeModels)
+            {
+                if (!model.model)
+                {
+                    throw std::invalid_argument("Missing native model in candidate search family");
+                }
+                // Copy the handle wrapper so reassignment through another
+                // caller-owned alias cannot change this declared family.
+                auto module = std::make_shared<const NativePeakModel>(*model.model);
+                const auto name = module->name();
+                models_.push_back({std::nullopt, std::move(module), name,
+                    model.fixedStep, model.options, std::move(model.windows)});
+            }
+            // Built-ins retain their enum order. Native modules follow in
+            // descriptor-name order, independent of the input ordering.
+            std::sort(models_.begin(), models_.end(), [](const auto &a, const auto &b)
+            {
+                if (a.kind.has_value() != b.kind.has_value())
+                {
+                    return a.kind.has_value();
+                }
+                return a.kind ? *a.kind < *b.kind : a.name < b.name;
+            });
             for (size_t i = 0; i < models_.size(); ++i)
             {
                 auto &model = models_[i];
                 const auto &options = model.options;
-                if ((model.model != PeakModelKind::PiecewiseQuadratic && model.model != PeakModelKind::Hyperbolic)
-                    || (i > 0 && models_[i - 1].model == model.model) || model.windows.empty()
+                if ((i > 0 && models_[i - 1].kind == model.kind && models_[i - 1].name == model.name) || model.windows.empty()
                     || !(model.fixedStep > 0 && std::isfinite(model.fixedStep))
-                    || (model.model == PeakModelKind::PiecewiseQuadratic && model.fixedStep != 1)
+                    || (model.kind == PeakModelKind::PiecewiseQuadratic && model.fixedStep != 1)
                     || !(options.minimumArea > 0 && std::isfinite(options.minimumArea))
                     || !(options.minimumCoverage > 0 && options.minimumCoverage < 1)
                     || !(options.logAlpha > 0 && options.logAlpha < .5))
@@ -501,12 +534,15 @@ namespace qAlgorithms
                     throw std::invalid_argument("Invalid model in candidate search family");
                 }
                 std::sort(model.windows.begin(), model.windows.end(), windowLess);
+                const size_t parameters = model.module ? model.module->parameterCount() : 0;
                 for (size_t j = 0; j < model.windows.size(); ++j)
                 {
                     const auto &window = model.windows[j];
                     if (window.scale < 2 || window.center >= length || window.scale > window.center
                         || window.scale > length - 1 - window.center
-                        || (model.model == PeakModelKind::PiecewiseQuadratic && window.scale > maxscale_global)
+                        || (model.kind == PeakModelKind::PiecewiseQuadratic && window.scale > maxscale_global)
+                        || (model.module && (2 * window.scale + 1 <= parameters
+                            || !std::isfinite(model.fixedStep * static_cast<double>(window.scale))))
                         || (j > 0 && !windowLess(model.windows[j - 1], window)))
                     {
                         throw std::invalid_argument("Invalid or duplicate candidate search window");
@@ -545,9 +581,12 @@ namespace qAlgorithms
             {
                 for (const auto &window : model.windows)
                 {
-                    CandidateSearchWindowResult entry{model.model, window, {}};
-                    entry.validation = validatePeakCandidate(model.model, intensities + window.center - window.scale,
-                        2 * window.scale + 1, model.fixedStep, model.options);
+                    CandidateSearchWindowResult entry{model.kind, window, {}};
+                    entry.nativeModelName = model.name;
+                    const float *raw = intensities + window.center - window.scale;
+                    const size_t count = 2 * window.scale + 1;
+                    entry.validation = model.module ? model.module->validateCandidate(raw, count, model.fixedStep, model.options)
+                        : validatePeakCandidate(*model.kind, raw, count, model.fixedStep, model.options);
                     const auto &background = entry.validation.background;
                     if (std::isfinite(background.constant.pValue) && std::isfinite(background.linear.pValue))
                     {
