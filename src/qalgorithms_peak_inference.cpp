@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_inference.h"
+#include "detail/qalgorithms_peak_inference.h"
 
 #include <algorithm>
 #include <cmath>
@@ -174,22 +175,17 @@ namespace qAlgorithms
             }
             const auto &cache = prepared ? *prepared : *localCache;
             const auto &geometry = cache.at(scale);
-            HyperbolicInference output;
-            output.residualDegreesOfFreedom = traces * (count - 3) - 1;
-            output.comparisonDegreesOfFreedom = 2 * traces;
             if (!geometry.identifiable)
             {
+                HyperbolicInference output;
+                output.residualDegreesOfFreedom = traces * (count - 3) - 1;
+                output.comparisonDegreesOfFreedom = 2 * traces;
                 output.status = InferenceStatus::invalidFit;
                 return output;
             }
-            std::vector<double> u(count);
             std::vector<std::vector<float>> logs(traces, std::vector<float>(count));
             std::vector<const float *> logPointers;
             std::vector<const float *> selectedRaw;
-            for (size_t i = 0; i < count; ++i)
-            {
-                u[i] = fixedStep * (static_cast<double>(i) - static_cast<double>(scale));
-            }
             for (size_t j = 0; j < traces; ++j)
             {
                 if (rawTraces[j] == nullptr)
@@ -208,9 +204,6 @@ namespace qAlgorithms
                 }
                 logPointers.push_back(logs[j].data());
             }
-            // Reuse the existing kernel unchanged. Only the requested central
-            // window is retained; extra diagnostic windows are discarded here,
-            // outside the hot production regression path.
             hyperbolic::FitView fit;
             hyperbolic::forEachRunning(logPointers, count, cache, [&](const hyperbolic::FitView &candidate)
             {
@@ -219,13 +212,54 @@ namespace qAlgorithms
                     fit = candidate;
                 }
             });
+            return inferFittedHyperbolicWindow(selectedRaw, logPointers, count, fit, cache, options, false);
+        }
+
+        HyperbolicInference inferFittedHyperbolicWindow(
+            const std::vector<const float *> &rawTraces, const std::vector<const float *> &logPointers,
+            size_t length, const HyperbolicModel::Fit &fit, const HyperbolicModel::Geometry &cache,
+            const HyperbolicInferenceOptions &options, bool supportedOnly)
+        {
+            const size_t traces = rawTraces.size(), scale = fit.scale, count = 2 * scale + 1;
+            const size_t offset = fit.center - scale;
+            const auto &geometry = cache.at(scale);
+            const double fixedStep = cache.step();
+            HyperbolicInference output;
+            output.residualDegreesOfFreedom = traces * (count - 3) - 1;
+            output.comparisonDegreesOfFreedom = 2 * traces;
+            if (!geometry.identifiable)
+            {
+                output.status = InferenceStatus::invalidFit;
+                return output;
+            }
+            std::vector<double> u(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                u[i] = fixedStep * (static_cast<double>(i) - static_cast<double>(scale));
+            }
+            if (supportedOnly)
+            {
+                for (const auto &peak : fit.locals)
+                {
+                    const double apex = hyperbolic::apexU(peak, fit.sharedSlope);
+                    const auto left = std::lower_bound(u.begin(), u.end(), apex) - u.begin();
+                    const auto right = u.end() - std::upper_bound(u.begin(), u.end(), apex);
+                    if (!std::isfinite(apex) || std::abs(apex) > geometry.edgeU
+                        || static_cast<size_t>(left) < options.minimumSamplesPerSide
+                        || static_cast<size_t>(right) < options.minimumSamplesPerSide)
+                    {
+                        output.status = InferenceStatus::screenedOut;
+                        return output;
+                    }
+                }
+            }
             std::vector<hyperbolic::Moments> moments(traces);
             for (size_t j = 0; j < traces; ++j)
             {
                 for (size_t i = 0; i < count; ++i)
                 {
-                    moments[j].sumY += logs[j][i];
-                    moments[j].sumUY += u[i] * logs[j][i];
+                    moments[j].sumY += logPointers[j][offset + i];
+                    moments[j].sumUY += u[i] * logPointers[j][offset + i];
                 }
             }
             long double sumU2 = 0, nullSlopeNumerator = 0;
@@ -243,8 +277,8 @@ namespace qAlgorithms
             {
                 for (size_t i = 0; i < count; ++i)
                 {
-                    const long double error = logs[j][i] - hyperbolic::predict(fit.locals[j], fit.sharedSlope, u[i]);
-                    const long double nullError = logs[j][i] - moments[j].sumY / count - nullSlope * u[i];
+                    const long double error = logPointers[j][offset + i] - hyperbolic::predict(fit.locals[j], fit.sharedSlope, u[i]);
+                    const long double nullError = logPointers[j][offset + i] - moments[j].sumY / count - nullSlope * u[i];
                     residual += error * error;
                     nullResidual += nullError * nullError;
                 }
@@ -287,7 +321,7 @@ namespace qAlgorithms
             {
                 for (size_t j = 0; j < traces; ++j)
                 {
-                    auto property = evaluateHyperbolicWindow(fit, j, cache, selectedRaw[j], count);
+                    auto property = evaluateHyperbolicWindow(fit, j, cache, rawTraces[j], length);
                     output.properties.push_back(property);
                     if (!property.finiteCoefficients || !property.integrable || !property.amplitude.valid
                         || property.apexU.status != PropertyStatus::Available
@@ -315,7 +349,7 @@ namespace qAlgorithms
                     for (size_t i = 0; i < count; ++i)
                     {
                         const long double shape = std::exp(hyperbolic::predict(peak, fit.sharedSlope, u[i]) - peak.intercept - maxShape);
-                        weights[i] = selectedRaw[j][i] * shape;
+                        weights[i] = rawTraces[j][offset + i] * shape;
                         weights[count + i] = shape * shape;
                         numerator += weights[i];
                         denominator += weights[count + i];

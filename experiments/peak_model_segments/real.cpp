@@ -9,6 +9,7 @@
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 using namespace qAlgorithms;
@@ -81,9 +82,11 @@ int main(int argc, char **argv)
 {
     try
     {
-        if (argc != 4 && argc != 6 && argc != 7)
+        const bool supportedOnly = argc == 8 && std::string_view(argv[7]) == "--supported-only";
+        if (argc != 4 && argc != 6 && argc != 7 && !supportedOnly)
         {
-            throw std::invalid_argument("Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv [SPANS.csv PEAKS.csv [APICES.csv]]");
+            throw std::invalid_argument(
+                "Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv [SPANS.csv PEAKS.csv [APICES.csv [--supported-only]]]");
         }
         const std::filesystem::path input(argv[1]);
         XML_File file(input.c_str(), mzML);
@@ -102,7 +105,7 @@ int main(int argc, char **argv)
             comparisonPeaks << "scan,start,end,quadratic_apex,hyperbolic_apex,delta,center,scale\n";
             comparisonPeaks.precision(17);
         }
-        if (argc == 7)
+        if (argc >= 7)
         {
             apexGroups.open(argv[6]);
             apexGroups << "scan,start,end,maximum_first,maximum_last,windows\n";
@@ -183,7 +186,8 @@ int main(int argc, char **argv)
             request.intensity = raw.data();
             request.length = raw.size();
             request.hyperbolicPlan = &plan;
-            const PeakSearchRequest::Segmentation segmentation{coordinates.data(), coordinateStep, .45, threshold};
+            const PeakSearchRequest::Segmentation segmentation{coordinates.data(), coordinateStep, .45, threshold,
+                supportedOnly ? SegmentedInferenceDetail::supportedWindows : SegmentedInferenceDetail::allWindows};
             request.segmentation = &segmentation;
             const auto result = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
             const auto afterSearch = Clock::now();
@@ -191,7 +195,7 @@ int main(int argc, char **argv)
             {
                 compareModels(scan, raw, result, comparisonSpans, comparisonPeaks);
             }
-            if (argc == 7)
+            if (argc >= 7)
             {
                 for (size_t i = 0; i < result.apexGroups.size(); ++i)
                 {
@@ -239,7 +243,7 @@ int main(int argc, char **argv)
             comparisonSpans.close();
             comparisonPeaks.close();
         }
-        if (argc == 7)
+        if (argc >= 7)
         {
             apexGroups.close();
         }

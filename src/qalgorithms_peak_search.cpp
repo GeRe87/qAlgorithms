@@ -1,5 +1,6 @@
 #include "qalgorithms_peak_search.h"
 #include "detail/qalgorithms_peak_candidates.h"
+#include "detail/qalgorithms_peak_inference.h"
 
 #include <algorithm>
 #include <cmath>
@@ -227,8 +228,13 @@ namespace qAlgorithms
 
         SegmentedHyperbolicSearchResult HyperbolicSearchPlan::evaluateSegmented(
             const std::vector<AlignedIntensityTrace> &traces, double coordinateStep,
-            double relativeTolerance, double threshold) const
+            double relativeTolerance, double threshold, SegmentedInferenceDetail inferenceDetail) const
         {
+            if (inferenceDetail != SegmentedInferenceDetail::allWindows
+                && inferenceDetail != SegmentedInferenceDetail::supportedWindows)
+            {
+                throw std::invalid_argument("Unknown segmented inference detail");
+            }
             for (const auto &trace : traces)
             {
                 if (trace.length != length_)
@@ -245,44 +251,72 @@ namespace qAlgorithms
             search.options = options_;
             search.options.selection = WindowSelection::exploratory;
             search.familySize = familySize_;
-            search.windows.reserve(windows_.size());
-            result.windowStatus.reserve(windows_.size());
+            search.windows.resize(windows_.size());
+            result.windowStatus.assign(windows_.size(), SegmentedWindowStatus::outsideEligibleSpan);
+            size_t maxScale = 2;
+            for (size_t i = 0; i < windows_.size(); ++i)
+            {
+                search.windows[i].window = windows_[i];
+                maxScale = std::max(maxScale, windows_[i].scale);
+            }
 
             const HyperbolicInferenceOptions inferenceOptions{
                 WindowSelection::exploratory, familySize_, options_.familyAlpha, options_.minimumSamplesPerSide};
-            std::vector<const float *> raw;
-            for (const auto &trace : traces)
-            {
-                raw.push_back(trace.intensity);
-            }
-            size_t maxScale = 2;
-            for (const auto &window : windows_)
-            {
-                maxScale = std::max(maxScale, window.scale);
-            }
             const HyperbolicModel::Geometry cache(maxScale, fixedStep_);
-            auto span = result.segmentation.spans.begin();
-            for (const auto &window : windows_)
+            std::vector<std::vector<float>> logs(traces.size());
+            std::vector<const float *> raw(traces.size()), logPointers(traces.size());
+            auto requested = windows_.begin();
+            for (const auto &span : result.segmentation.spans)
             {
-                while (span != result.segmentation.spans.end() && span->end <= window.center)
+                if (span.status != IntensitySpanStatus::eligible)
                 {
-                    ++span;
+                    continue;
                 }
-                PeakSearchResult entry;
-                entry.window = window;
-                auto status = SegmentedWindowStatus::outsideEligibleSpan;
-                if (span != result.segmentation.spans.end() && span->status == IntensitySpanStatus::eligible
-                    && window.center - window.scale >= span->start && window.center + window.scale < span->end)
+                while (requested != windows_.end() && requested->center < span.start)
                 {
-                    entry.inference = inferHyperbolicWindow(raw, length_, window.center, window.scale, cache, inferenceOptions);
-                    status = SegmentedWindowStatus::evaluated;
+                    ++requested;
+                }
+                if (requested == windows_.end())
+                {
+                    break;
+                }
+                if (requested->center >= span.end)
+                {
+                    continue;
+                }
+                const size_t length = span.end - span.start;
+                for (size_t j = 0; j < traces.size(); ++j)
+                {
+                    raw[j] = traces[j].intensity + span.start;
+                    logs[j].resize(length);
+                    for (size_t i = 0; i < length; ++i)
+                    {
+                        logs[j][i] = static_cast<float>(std::log(static_cast<double>(raw[j][i])));
+                    }
+                    logPointers[j] = logs[j].data();
+                }
+                HyperbolicModel::runningFit(logPointers, length, cache, [&](const auto &fit)
+                {
+                    const PeakSearchWindow window{span.start + fit.center, fit.scale};
+                    while (requested != windows_.end() && windowLess(*requested, window))
+                    {
+                        ++requested;
+                    }
+                    if (requested == windows_.end() || windowLess(window, *requested))
+                    {
+                        return;
+                    }
+                    const size_t index = static_cast<size_t>(requested - windows_.begin());
+                    ++requested;
+                    auto &entry = search.windows[index];
+                    entry.inference = inferFittedHyperbolicWindow(raw, logPointers, length, fit, cache,
+                        inferenceOptions, inferenceDetail == SegmentedInferenceDetail::supportedWindows);
+                    result.windowStatus[index] = SegmentedWindowStatus::evaluated;
                     if (entry.inference.status == InferenceStatus::available && entry.inference.observedSupportSufficient)
                     {
-                        result.diagnosticIndices.push_back(search.windows.size());
+                        result.diagnosticIndices.push_back(index);
                     }
-                }
-                search.windows.push_back(std::move(entry));
-                result.windowStatus.push_back(status);
+                });
             }
             result.diagnosticGroups = collectUnresolvedGroups(search.windows, result.diagnosticIndices);
             if (traces.size() == 1)
@@ -290,7 +324,7 @@ namespace qAlgorithms
                 result.apexGroups.reserve(result.diagnosticGroups.size());
                 for (const auto &group : result.diagnosticGroups)
                 {
-                    result.apexGroups.push_back(classifyApices(raw.front(), group, search));
+                    result.apexGroups.push_back(classifyApices(traces.front().intensity, group, search));
                 }
             }
             return result;
@@ -347,7 +381,7 @@ namespace qAlgorithms
                     const auto &segmentation = *request.segmentation;
                     return request.hyperbolicPlan->evaluateSegmented(
                         {{request.intensity, segmentation.coordinates, request.length}},
-                        segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold);
+                        segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold, segmentation.detail);
                 }
                 return request.hyperbolicPlan->evaluate({request.intensity});
             }

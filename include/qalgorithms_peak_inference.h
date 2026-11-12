@@ -31,7 +31,8 @@ namespace qAlgorithms
             available,
             invalidFit,
             degenerateNoise,
-            numericalFailure
+            numericalFailure,
+            screenedOut // exploratory geometry/support screen; properties were not evaluated
         };
 
         // The caller must explicitly declare fixed windows and the complete

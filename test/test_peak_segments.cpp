@@ -199,6 +199,32 @@ int main()
         require(maxima[0].first == 9 && maxima[0].last == 10 && maxima[0].windowIndices == std::vector<size_t>{0, 1}
             && maxima[1].first == 21 && maxima[1].last == 21 && maxima[1].windowIndices == std::vector<size_t>{2, 3},
             "Observed plateaus are counted once and retain their supporting fits");
+        const auto screened = doublePlan.evaluateSegmented({{doublePeak.data(), doubleGrid.data(), doublePeak.size()}},
+            1, 0, e, SegmentedInferenceDetail::supportedWindows);
+        require(screened.diagnosticIndices == doubleResult.diagnosticIndices, "Screen preserves the supported fits");
+        for (size_t index : screened.diagnosticIndices)
+        {
+            const auto &actual = screened.search.windows[index].inference;
+            const auto &reference = doubleResult.search.windows[index].inference;
+            const auto window = doubleResult.search.windows[index].window;
+            const auto direct = inferHyperbolicWindow({doublePeak.data()}, doublePeak.size(), window.center,
+                window.scale, .35);
+            require(actual.covariance == reference.covariance && actual.covariance == direct.covariance
+                && actual.properties.front().apexU.value == direct.properties.front().apexU.value
+                && actual.properties.front().areaU.value == direct.properties.front().areaU.value,
+                "Running and independent per-window entry points retain exact apex, area and covariance");
+        }
+        for (size_t i = 4; i <= 27; ++i)
+        {
+            const double u = .35 * (static_cast<double>(i) - 10);
+            doublePeak[i] = static_cast<float>(std::exp(5 + std::cosh(u / 3)));
+        }
+        const auto convex = doublePlan.evaluateSegmented({{doublePeak.data(), doubleGrid.data(), doublePeak.size()}},
+            1, 0, e, SegmentedInferenceDetail::supportedWindows);
+        require(convex.search.windows[0].inference.status == InferenceStatus::screenedOut
+            && convex.search.windows[0].inference.properties.empty()
+            && convex.search.windows[0].inference.covariance.empty() && convex.diagnosticIndices.empty(),
+            "Convex windows are screened before amplitude correction, area and covariance");
     }
     catch (const std::exception &error)
     {
