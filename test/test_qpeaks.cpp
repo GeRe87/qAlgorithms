@@ -702,6 +702,16 @@ static void test_three_mandatory_groups_inside_two_resolution_intervals()
     { rejected = std::string(error.what()).find("protected stable fit") != std::string::npos; }
     assert(rejected && descriptions.empty() && candidates[0].isValid,
            "A collective must not replace a protected fit", NULL);
+    candidates = original;
+    candidates[0].isValid = true;
+    const auto protectedFit = candidates[0];
+    size_t omitted = 0;
+    resolveApexGroups(&candidates, y.data(), y.size(), groups.data(), conflicting,
+        nullptr, apexSearchBudget, &omitted);
+    count = 0;
+    for (const auto &reg : candidates) count += reg.isValid;
+    assert(omitted == 1 && count == 1 && same_peak_description(candidates[0], protectedFit),
+           "Centroid omission must preserve the protected fit in the same component", NULL);
 
     candidates = original; descriptions.clear();
     std::vector<float> withNeighbor = y; withNeighbor.resize(33,5); withNeighbor[26] = 120;
@@ -715,6 +725,15 @@ static void test_three_mandatory_groups_inside_two_resolution_intervals()
     assert(count == 2 && descriptions.size() == 1 && candidates.back().isValid &&
            same_peak_description(candidates.back(), stable),
            "A clearly resolved stable neighbour must remain unchanged beside a collective", NULL);
+    candidates = original;
+    candidates.push_back(stable);
+    omitted = 0;
+    resolveApexGroups(&candidates, withNeighbor.data(), withNeighbor.size(), groups.data(), withStable,
+        nullptr, apexSearchBudget, &omitted);
+    count = 0;
+    for (const auto &reg : candidates) count += reg.isValid;
+    assert(omitted == 1 && count == 1 && same_peak_description(candidates.back(), stable),
+           "Centroid omission must preserve the independently resolved neighbour", NULL);
 }
 
 static void test_collective_expansion_closes_neighbours_without_replacing_stable_peaks()

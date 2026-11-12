@@ -72,6 +72,8 @@ namespace qAlgorithms
         return witnesses;
     }
 
+    constexpr size_t apexSearchBudget = 200000;
+
     static void resolveApexGroups(
         std::vector<RegressionGauss> *validRegressions,
         const float *intensities,
@@ -79,7 +81,7 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const std::vector<bool> &conflictingGroups,
         std::vector<UnresolvedPeak> *unresolvedGroups = nullptr,
-        const size_t searchBudget = 200000);
+        const size_t searchBudget = apexSearchBudget, size_t *omittedComponents = nullptr);
 
     static int32_t regression_on_continuum(
         const float *intensities,
@@ -88,7 +90,7 @@ namespace qAlgorithms
         const uint16_t *const df,
         const size_t length,
         std::vector<RegressionGauss> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr);
+        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr, size_t *omittedComponents = nullptr);
 
     /// @brief adjust the height of a regression to better fit the exponential data
     /// @param intensities non-logarithmic intensity values the regression was fitted to
@@ -198,14 +200,14 @@ namespace qAlgorithms
         reg->dqs = erfc(reg->area_unc / reg->area);
     }
 
-    int32_t qpeaks_find(
+    static int32_t findPeaksWithUnresolvedPolicy(
         // SOME_IMPLEMENTATION_OF_LINEAR_ALLOCATOR_HERE
         const float *intensity_base,
         const float *x_values,
         const uint16_t *DF_cum,
         const size_t length,
         std::vector<RegressionGauss> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups)
+        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
     {
         // control input for nullpointers, mismatching x and y, and fitting maxscale
         if (intensity_base == nullptr || x_values == nullptr || result == nullptr)
@@ -274,7 +276,7 @@ namespace qAlgorithms
                                         intensities_log,
                                         df,
                                         newLen,
-                                        result, unresolvedGroups);
+                                        result, unresolvedGroups, omittedComponents);
                 if (status < 0)
                     return status;
                 for (size_t i = previousResults; i < result->size(); ++i)
@@ -293,6 +295,12 @@ namespace qAlgorithms
         }
 
         return (int32_t)result->size();
+    }
+
+    int32_t qpeaks_find(const float *intensity, const float *x, const uint16_t *df,
+        size_t length, std::vector<RegressionGauss> *result, std::vector<UnresolvedPeak> *unresolvedGroups)
+    {
+        return findPeaksWithUnresolvedPolicy(intensity, x, df, length, result, unresolvedGroups, nullptr);
     }
 
 #pragma region "running regression"
@@ -381,7 +389,7 @@ namespace qAlgorithms
         const uint16_t *const df,
         const size_t length,
         std::vector<RegressionGauss> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups)
+        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
     {
 
         // coefficients for single-b0 peaks, spans all regressions over a peak window
@@ -457,7 +465,7 @@ namespace qAlgorithms
         if (hasConflict)
             resolveApexGroups(&validRegressions, intensities, length,
                              apexGroups.data(), conflictingGroups,
-                             unresolvedGroups ? &unresolvedCandidates : nullptr);
+                             unresolvedGroups ? &unresolvedCandidates : nullptr, apexSearchBudget, omittedComponents);
 
         for (size_t peak = 0; peak < validRegressions.size(); peak++)
         {
@@ -492,7 +500,7 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const std::vector<bool> &conflictingGroups,
         std::vector<UnresolvedPeak> *unresolvedGroups,
-        const size_t searchBudget)
+        const size_t searchBudget, size_t *omittedComponents)
     {
         struct SearchLimit final : std::runtime_error
         { SearchLimit() : std::runtime_error("Joint apex selection exceeded its explicit search limit.") {} };
@@ -740,7 +748,7 @@ namespace qAlgorithms
             if (initiallySelected[i] && support[i] < 0)
                 selected.push_back(i);
         const size_t fixedCount = selected.size();
-        size_t coalescedGroups = 0;
+        size_t coalescedGroups = 0, omitted = 0;
         for (auto &options : choices)
             std::sort(options.begin(), options.end());
         // Disconnected apex ranges cannot constrain each other. Solve their
@@ -776,6 +784,7 @@ namespace qAlgorithms
         retry = false;
         selected = fixedSelection;
         coalescedGroups = 0;
+        omitted = 0;
         if (unresolvedGroups) unresolvedGroups->resize(previousDescriptions);
         for (size_t component = 0; component < choices.size(); ++component)
         {
@@ -909,11 +918,26 @@ namespace qAlgorithms
             catch (const SearchLimit &)
             {
                 selected.resize(componentStart);
-                if (!unresolvedGroups) throw;
+                if (!unresolvedGroups && !omittedComponents) throw;
                 limited = true;
             }
             if (limited || bestSelection.size() != expected)
             {
+                if (omittedComponents)
+                {
+                    // A collective would enter qBinning as an individual ion.
+                    // Retain the earlier selections and continue with other components.
+                    for (size_t k : members)
+                    {
+                        const size_t best = choices[k].front().second;
+                        if (initiallySelected[best])
+                            selected.push_back(best);
+                        else
+                            ++coalescedGroups;
+                    }
+                    ++omitted;
+                    continue;
+                }
                 if (!unresolvedGroups)
                     throw std::runtime_error("No compatible accepted fits describe all supported maxima.");
                 size_t left = length, right = 0;
@@ -1129,6 +1153,8 @@ namespace qAlgorithms
             reg.isValid = false;
         for (size_t i : selected)
             validRegressions->at(i).isValid = true;
+        if (omittedComponents)
+            *omittedComponents += omitted;
     }
 
     static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[])
@@ -2581,9 +2607,11 @@ namespace qAlgorithms
             }
 
             int32_t peaksFound = 0;
+            size_t omittedComponents = 0;
             try
             {
-                peaksFound = qpeaks_find(spectrum_int.data(), spectrum_mz.data(), nullptr, spectrum_int.size(), &ret);
+                peaksFound = findPeaksWithUnresolvedPolicy(spectrum_int.data(), spectrum_mz.data(), nullptr,
+                    spectrum_int.size(), &ret, nullptr, &omittedComponents);
             }
             catch (const std::exception &error)
             {
@@ -2592,6 +2620,9 @@ namespace qAlgorithms
             }
             if (peaksFound < 0)
                 throw std::runtime_error("Centroid detection rejected a spectrum.");
+            if (omittedComponents)
+                (void)fprintf(stderr, "Warning: omitted %zu unresolved centroid component(s) at spectrum index %u.\n",
+                    omittedComponents, selectedIndices->at(specNum));
 
             for (size_t p = 0; p < (size_t)peaksFound; p++)
             {
