@@ -151,7 +151,6 @@ static void testCompleteCascade(PeakModelKind model, double step)
     bool missingThresholdRejected = false;
     try
     {
-        testBackgroundReplay();
         FullPeakCandidateOptions missing;
         missing.minimumArea = 100;
         (void)validatePeakCandidate(model, raw.data(), raw.size(), step, missing);
@@ -270,6 +269,7 @@ int main()
 {
     try
     {
+        testBackgroundReplay();
         testBackground(PeakModelKind::PiecewiseQuadratic, 1);
         testBackground(PeakModelKind::Hyperbolic, .25);
         testCompleteCascade(PeakModelKind::PiecewiseQuadratic, 1);

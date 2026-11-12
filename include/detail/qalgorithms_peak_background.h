@@ -11,7 +11,8 @@ namespace qAlgorithms
     namespace peak_model
     {
         // Replay is synchronous and uses the same fitting procedure as the
-        // observed template. On success it fills one value per raw sample.
+        // observed template. On success it fills one finite, nonnegative
+        // shape value per raw sample.
         // The grid matches the input length, as does a supported template.
         using PeakBackgroundReplay = std::function<bool(const std::vector<double> &, std::vector<double> &)>;
 
