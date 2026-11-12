@@ -1,5 +1,5 @@
 #include "detail/qalgorithms_peak_background.h"
-#include "qalgorithms_peak_validation.h"
+#include "detail/qalgorithms_peak_cascade.h"
 
 #include <algorithm>
 #include <cmath>
@@ -253,14 +253,10 @@ namespace qAlgorithms
                     supported = peak.makeShape(fit, x, shape);
                 }
             });
-            for (PeakValidationStatus stage : {result.stages.geometry.form, result.stages.geometry.apexSupport,
-                result.stages.formConfidence, result.stages.areaEvidence.status, result.stages.windowCoverage.status})
+            result.status = peakCascadeStatus(result.stages);
+            if (result.status != PeakValidationStatus::passed)
             {
-                if (stage != PeakValidationStatus::passed)
-                {
-                    result.status = stage;
-                    return result;
-                }
+                return result;
             }
             result.background = runPeakBackground(values, x, shape, supported, [&](const auto &draw, auto &templateValues)
             {

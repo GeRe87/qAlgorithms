@@ -3,6 +3,7 @@
 #include "qalgorithms_input_output.h"
 #include "qalgorithms_qbin.h"
 #include "qalgorithms_qpeaks.h"
+#include "qalgorithms_peak_module.h"
 #include "qalgorithms_read_file.h"
 
 #include <cstdio>
@@ -14,9 +15,11 @@
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace qAlgorithms;
@@ -270,10 +273,63 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         throw std::runtime_error("No MS1 profile spectra with a supported polarity were found. Centroid-only data is not supported.");
 }
 
+// Diagnostic entry point for a prespecified window and an external model.
+static int runPeakModelModule(int argc, const char *argv[])
+{
+    if (argc < 11)
+    {
+        throw std::invalid_argument(
+            "Usage: qAlgorithms --peak-model-module PATH STEP MIN_AREA MIN_COVERAGE I0 I1 I2 I3 I4 [...]");
+    }
+    const auto parse = [](const std::string &value)
+    {
+        size_t end = 0;
+        const double number = std::stod(value, &end);
+        if (end != value.size() || !std::isfinite(number))
+        {
+            throw std::invalid_argument("Expected a finite numeric module argument");
+        }
+        return number;
+    };
+    std::vector<float> raw;
+    for (int i = 6; i < argc; ++i)
+    {
+        const double value = parse(argv[i]);
+        if (std::abs(value) > std::numeric_limits<float>::max())
+        {
+            throw std::invalid_argument("Intensity is outside the supported range");
+        }
+        raw.push_back(static_cast<float>(value));
+    }
+    const peak_model::FullPeakCandidateOptions options{parse(argv[4]), parse(argv[5]), .05, {}};
+    const peak_model::NativePeakModel model{std::filesystem::path(argv[2])};
+    const auto result = model.validateCandidate(raw.data(), raw.size(), parse(argv[3]), options);
+    const auto status = [](peak_model::PeakValidationStatus value)
+    {
+        switch (value)
+        {
+        case peak_model::PeakValidationStatus::passed: return "passed";
+        case peak_model::PeakValidationStatus::failed: return "failed";
+        case peak_model::PeakValidationStatus::notEvaluated: return "notEvaluated";
+        case peak_model::PeakValidationStatus::unavailable: return "unavailable";
+        }
+        return "unavailable";
+    };
+    printf("model=%s\nstatus=%s\nform=%s\napex=%s\nformConfidence=%s\narea=%s\ncoverage=%s\nbackground=%s\n",
+        model.name().c_str(), status(result.status), status(result.stages.geometry.form),
+        status(result.stages.geometry.apexSupport), status(result.stages.formConfidence),
+        status(result.stages.areaEvidence.status), status(result.stages.windowCoverage.status), status(result.background.status));
+    return 0;
+}
+
 int main(int argc, const char *argv[])
 {
     try
     {
+        if (argc > 1 && std::string_view(argv[1]) == "--peak-model-module")
+        {
+            return runPeakModelModule(argc, argv);
+        }
         UserInputSettings args = passCliArgs(argc, argv);
         if (!inputsAreSensible(args))
             return 1;

@@ -3,7 +3,7 @@ on:
   push:
     branches: [agent/peak-model-inference-stage-c]
   pull_request:
-    paths: ['include/qalgorithms_peak_inference.h', 'src/qalgorithms_peak_inference.cpp', 'test/test_peak_inference.cpp', 'include/qalgorithms_peak_validation.h', 'src/qalgorithms_peak_validation.cpp', 'test/test_peak_validation.cpp', 'include/qalgorithms_peak_test_types.h', 'include/detail/qalgorithms_peak_background.h', 'src/qalgorithms_peak_background.cpp', 'src/qalgorithms_peak_builtin_models.cpp', 'test/test_peak_background.cpp', 'experiments/peak_model_inference/**', '.github/workflows/peak-model-stage-c.yml']
+    paths: ['include/qalgorithms_peak_inference.h', 'src/qalgorithms_peak_inference.cpp', 'test/test_peak_inference.cpp', 'include/qalgorithms_peak_validation.h', 'src/qalgorithms_peak_validation.cpp', 'test/test_peak_validation.cpp', 'include/qalgorithms_peak_test_types.h', 'include/detail/qalgorithms_peak_background.h', 'src/qalgorithms_peak_background.cpp', 'src/qalgorithms_peak_builtin_models.cpp', 'include/detail/qalgorithms_peak_cascade.h', 'include/qalgorithms_peak_model_abi.h', 'include/qalgorithms_peak_module.h', 'src/qalgorithms_peak_module.cpp', 'test/integration/test_peak_module.py', 'test/integration/peak_module_fixture/**', 'test/test_peak_background.cpp', 'experiments/peak_model_inference/**', '.github/workflows/peak-model-stage-c.yml']
 jobs:
   verify:
     runs-on: ubuntu-24.04

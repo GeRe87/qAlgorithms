@@ -135,6 +135,9 @@ list(FILTER SOURCES EXCLUDE REGEX "qalgorithms_main\\.cpp") # Remove test/main f
 
 # Now we make a library from our sources that we can then link main.cpp and all the tests against
 add_library(qalgo_lib ${SOURCES})
+if(CMAKE_DL_LIBS)
+    target_link_libraries(qalgo_lib PRIVATE ${CMAKE_DL_LIBS})
+endif()
 # Expose include dirs to consumers (app + tests)
 target_include_directories(qalgo_lib PUBLIC
     ${INCLUDE_DIR}
@@ -200,6 +203,11 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_folding_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")
     set_tests_properties(test_folding_cli PROPERTIES TIMEOUT 120)
+    add_test(NAME test_peak_module
+        COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_peak_module.py"
+                "$<TARGET_FILE:qAlgorithms>" "${CMAKE_COMMAND}" "${CMAKE_GENERATOR}" "${CMAKE_CXX_COMPILER}"
+                "$<CONFIG>" "${CMAKE_GENERATOR_PLATFORM}" "${CMAKE_GENERATOR_TOOLSET}")
+    set_tests_properties(test_peak_module PROPERTIES TIMEOUT 120)
 endif()
 endif()
 

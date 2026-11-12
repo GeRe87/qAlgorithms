@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.12)
+project(ExternalPeakModel LANGUAGES CXX)
+
+add_library(external_gaussian MODULE gaussian.cc)
+add_library(incompatible_gaussian MODULE gaussian.cc)
+target_compile_definitions(incompatible_gaussian PRIVATE INCOMPATIBLE_VERSION)
+foreach(model IN ITEMS external_gaussian incompatible_gaussian)
+    target_include_directories(${model} PRIVATE "${QALGORITHMS_ABI_INCLUDE}")
+    file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${model}-$<CONFIG>.txt" CONTENT "$<TARGET_FILE:${model}>")
+endforeach()
