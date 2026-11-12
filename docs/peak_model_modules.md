@@ -154,3 +154,33 @@ selected scans and the fixed segment. It does not include m/z calibration,
 drift or feature selection uncertainty. The joint columns are empty when
 there is insufficient support for a concave fit with an apex covered by
 all contributing scans, or when the chromatographic feature is unresolved.
+
+## Centroiding on a five-scan superspectrum
+
+```text
+qAlgorithms -i profile.mzML -o output --superspectrum GRID_STEP MAX_GAP MAX_HALF_WIDTH
+```
+
+`GRID_STEP` and `MAX_GAP` are in m/z. The half-width is in grid samples,
+within the compiled qPeaks range starting at two. Each polarity is
+processed separately. The first five MS1 profile scans form the initial
+window, then each new scan advances it by one.
+
+Adjacent positive profile points within `MAX_GAP` define covered runs.
+Their union defines the superspectrum segments before interpolation.
+Common intervals supported by at least two runs from distinct scans
+are projected onto the fixed lattice `index * GRID_STEP`. Interpolation is
+linear in intensity and confined to each scan's covered runs. Resampled
+runs stay cached until their scan leaves the FIFO. The fit uses the
+precomputed piecewise quadratic qPeaks inverse and its running sums along
+m/z. Each window estimates a shared shape and a separate height per scan.
+
+The experimental `*_superspectrum_centroids.csv` has a row per contributing
+scan, with the window bounds and centroid ID as the grouping key.
+Concave fits must have an interior apex, a fitted height at least twice
+both fitted edge heights, and explain more than half of the mean log
+trace's variation in the fit window. Overlapping candidates are ranked by
+explained variation times the contributing scan count. These heuristics
+operate on the shared shape. A centroid can recur in successive windows.
+The CSV is window-level output for evaluating the method before linking
+centroids across windows or estimating their scan-to-scan m/z variation.
