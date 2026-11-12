@@ -81,9 +81,9 @@ int main(int argc, char **argv)
 {
     try
     {
-        if (argc != 4 && argc != 6)
+        if (argc != 4 && argc != 6 && argc != 7)
         {
-            throw std::invalid_argument("Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv [SPANS.csv PEAKS.csv]");
+            throw std::invalid_argument("Usage: real_peak_segments INPUT.mzML SCANS.csv WINDOWS.csv [SPANS.csv PEAKS.csv [APICES.csv]]");
         }
         const std::filesystem::path input(argv[1]);
         XML_File file(input.c_str(), mzML);
@@ -93,14 +93,19 @@ int main(int argc, char **argv)
             throw std::runtime_error("Missing profile MS1 data");
         }
         std::ofstream summary(argv[2]), windows(argv[3]);
-        std::ofstream comparisonSpans, comparisonPeaks;
-        if (argc == 6)
+        std::ofstream comparisonSpans, comparisonPeaks, apexGroups;
+        if (argc >= 6)
         {
             comparisonSpans.open(argv[4]);
             comparisonPeaks.open(argv[5]);
             comparisonSpans << "scan,start,end,hyperbolic_windows,hyperbolic_groups,quadratic_status,quadratic_peaks,error\n";
             comparisonPeaks << "scan,start,end,quadratic_apex,hyperbolic_apex,delta,center,scale\n";
             comparisonPeaks.precision(17);
+        }
+        if (argc == 7)
+        {
+            apexGroups.open(argv[6]);
+            apexGroups << "scan,start,end,maximum_first,maximum_last,windows\n";
         }
         summary << "scan,points,zeros,positive_below_threshold,segments,eligible_segments,short_segments,"
                    "eligible_points,coordinate_breaks,declared,fitted,available,finite_coefficients,integrable,"
@@ -182,9 +187,24 @@ int main(int argc, char **argv)
             request.segmentation = &segmentation;
             const auto result = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
             const auto afterSearch = Clock::now();
-            if (argc == 6)
+            if (argc >= 6)
             {
                 compareModels(scan, raw, result, comparisonSpans, comparisonPeaks);
+            }
+            if (argc == 7)
+            {
+                for (size_t i = 0; i < result.apexGroups.size(); ++i)
+                {
+                    const auto &bounds = result.diagnosticGroups[i];
+                    const auto &group = result.apexGroups[i];
+                    for (const auto &maximum : group.maxima)
+                    {
+                        apexGroups << scan << ',' << bounds.start << ',' << bounds.end << ',' << maximum.first << ','
+                                   << maximum.last << ',' << maximum.windowIndices.size() << '\n';
+                    }
+                    apexGroups << scan << ',' << bounds.start << ',' << bounds.end << ",,,"
+                               << group.unassignedWindowIndices.size() << '\n';
+                }
             }
             size_t fitted = 0, available = 0;
             for (size_t i = 0; i < result.search.windows.size(); ++i)
@@ -214,12 +234,16 @@ int main(int argc, char **argv)
         }
         summary.close();
         windows.close();
-        if (argc == 6)
+        if (argc >= 6)
         {
             comparisonSpans.close();
             comparisonPeaks.close();
         }
-        if (!summary || !windows || !comparisonSpans || !comparisonPeaks)
+        if (argc == 7)
+        {
+            apexGroups.close();
+        }
+        if (!summary || !windows || !comparisonSpans || !comparisonPeaks || !apexGroups)
         {
             throw std::runtime_error("Incomplete segment evidence");
         }

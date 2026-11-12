@@ -66,6 +66,49 @@ namespace qAlgorithms
                 });
                 return groups;
             }
+
+            DiagnosticApexGroup classifyApices(const float *raw, const UnresolvedSearchGroup &group,
+                const HyperbolicSearchResult &search)
+            {
+                DiagnosticApexGroup result;
+                for (size_t first = group.start; first <= group.end;)
+                {
+                    size_t last = first;
+                    while (last < group.end && raw[last + 1] == raw[first])
+                    {
+                        ++last;
+                    }
+                    if (first > group.start && last < group.end
+                        && raw[first - 1] < raw[first] && raw[last + 1] < raw[last])
+                    {
+                        result.maxima.push_back({first, last, {}});
+                    }
+                    first = last + 1;
+                }
+                for (size_t index : group.windowIndices)
+                {
+                    const auto &entry = search.windows[index];
+                    const auto &window = entry.window;
+                    const double apex = static_cast<double>(window.center)
+                        + entry.inference.properties.front().apexU.value / search.fixedStep;
+                    const auto left = static_cast<size_t>(std::floor(apex));
+                    const auto right = static_cast<size_t>(std::ceil(apex));
+                    // As in the quadratic selector, an observed maximum must
+                    // touch a sample bracketing the fitted apex.
+                    const auto maximum = std::lower_bound(result.maxima.begin(), result.maxima.end(), left,
+                        [](const ObservedApexHypothesis &candidate, size_t sample) { return candidate.last < sample; });
+                    if (maximum != result.maxima.end() && maximum->first <= right
+                        && maximum->first >= window.center - window.scale && maximum->last <= window.center + window.scale)
+                    {
+                        maximum->windowIndices.push_back(index);
+                    }
+                    else
+                    {
+                        result.unassignedWindowIndices.push_back(index);
+                    }
+                }
+                return result;
+            }
         }
 
         HyperbolicSearchPlan::HyperbolicSearchPlan(
@@ -242,6 +285,14 @@ namespace qAlgorithms
                 result.windowStatus.push_back(status);
             }
             result.diagnosticGroups = collectUnresolvedGroups(search.windows, result.diagnosticIndices);
+            if (traces.size() == 1)
+            {
+                result.apexGroups.reserve(result.diagnosticGroups.size());
+                for (const auto &group : result.diagnosticGroups)
+                {
+                    result.apexGroups.push_back(classifyApices(raw.front(), group, search));
+                }
+            }
             return result;
         }
 

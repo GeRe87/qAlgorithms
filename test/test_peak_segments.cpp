@@ -176,6 +176,29 @@ int main()
             require(apex.status == PropertyStatus::Available && std::abs(entry.window.center + apex.value / .2 - 11) < 1,
                 "Apex can be mapped back to the original sample grid");
         }
+        require(dispatched.apexGroups.size() == 1 && dispatched.apexGroups.front().maxima.size() == 1
+            && dispatched.apexGroups.front().maxima.front().windowIndices == group.windowIndices,
+            "Different scales at the same observed maximum remain one hypothesis");
+        require(result.apexGroups.empty(), "Apex hypotheses require a single observed trace");
+
+        std::vector<float> doublePeak(33, 0);
+        std::vector<double> doubleGrid(doublePeak.size());
+        std::iota(doubleGrid.begin(), doubleGrid.end(), 0.0);
+        for (size_t i = 4; i <= 27; ++i)
+        {
+            const double sample = static_cast<double>(i);
+            const double distance = std::min(std::abs(sample - 10), std::abs(sample - 21));
+            doublePeak[i] = static_cast<float>(std::exp(9 - std::cosh(.35 * distance)));
+        }
+        doublePeak[9] = doublePeak[10];
+        const HyperbolicSearchPlan doublePlan(doublePeak.size(), .35, {{10, 5}, {10, 6}, {21, 5}, {21, 6}});
+        const auto doubleResult = doublePlan.evaluateSegmented({{doublePeak.data(), doubleGrid.data(), doublePeak.size()}}, 1);
+        require(doubleResult.apexGroups.size() == 1 && doubleResult.apexGroups.front().maxima.size() == 2,
+            "One overlap envelope can contain two observed apex hypotheses");
+        const auto &maxima = doubleResult.apexGroups.front().maxima;
+        require(maxima[0].first == 9 && maxima[0].last == 10 && maxima[0].windowIndices == std::vector<size_t>{0, 1}
+            && maxima[1].first == 21 && maxima[1].last == 21 && maxima[1].windowIndices == std::vector<size_t>{2, 3},
+            "Observed plateaus are counted once and retain their supporting fits");
     }
     catch (const std::exception &error)
     {
