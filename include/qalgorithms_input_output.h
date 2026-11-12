@@ -5,6 +5,7 @@
 #include "qalgorithms_logging.h"
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,13 @@ namespace qAlgorithms
         unspecified,
         tof,
         orbitrap
+    };
+
+    struct CalibratedPeakSettings
+    {
+        std::string model; // quadratic, hyperbolic, or module:PATH
+        double step = 0, minimumAreaMz = 0, minimumCoverage = 0, alpha = 0;
+        size_t minScale = 0, maxScale = 0, rotations = 0;
     };
 
     struct UserInputSettings
@@ -66,6 +74,7 @@ namespace qAlgorithms
         FoldingCliAxis foldingAxis = FoldingCliAxis::unspecified;
         double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
         size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
+        std::optional<CalibratedPeakSettings> calibratedPeaks;
 
         // progress reporting
         bool silent = false;

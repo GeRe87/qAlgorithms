@@ -17,6 +17,7 @@
 #include "qalgorithms_input_output.h"
 #include <iomanip>
 #include "qalgorithms_read_file.h"
+#include "qalgorithms_qpeaks.h"
 #include "qalgorithms_utils.h"
 
 namespace qAlgorithms
@@ -71,6 +72,10 @@ namespace qAlgorithms
         "      --folding-min-intensity <N>: Minimum raw intensity for candidate maxima (default 100).\n"
         "      --folding-max-scans <N>     : Process at most N MS1 profile scans per polarity\n"
         "                                    (default: all). This is a research screening mode.\n"
+        "      --calibrated-peaks MODEL STEP MIN_AREA_MZ MIN_COVERAGE MIN_SCALE MAX_SCALE ALPHA ROTATIONS\n"
+        "                                   Scan-level peak CSV with position, area and covariance.\n"
+        "                                   MODEL is quadratic, hyperbolic or module:PATH.\n"
+        "                                   Requires an affine m/z grid and an output directory.\n"
         //   "      -sp, --subprofile:           (@todo) instead of the peaks, print all proflie-mode data points which\n"
         //   "                                   were used to create the final peaks. This does not return any quality\n"
         //   "                                   scores. Only use this option when reading in prodile mode files.\n"
@@ -233,6 +238,49 @@ namespace qAlgorithms
             else if (argument == "--peak-folding")
             {
                 args.peakFolding = true;
+            }
+            else if (argument == "--calibrated-peaks")
+            {
+                if (argc - i <= 8 || args.calibratedPeaks)
+                    throw std::invalid_argument("--calibrated-peaks requires one model and seven numeric arguments");
+                auto number = [&](const char *field)
+                {
+                    const std::string value = argv[++i];
+                    size_t end = 0;
+                    const double parsed = std::stod(value, &end);
+                    if (end != value.size() || !std::isfinite(parsed))
+                        throw std::invalid_argument(std::string("Invalid calibrated peak ") + field);
+                    return parsed;
+                };
+                auto count = [&](const char *field)
+                {
+                    const std::string value = argv[++i];
+                    size_t end = 0;
+                    if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
+                        throw std::invalid_argument(std::string("Invalid calibrated peak ") + field);
+                    const auto parsed = std::stoull(value, &end);
+                    if (end != value.size() || parsed > std::numeric_limits<size_t>::max())
+                        throw std::invalid_argument(std::string("Invalid calibrated peak ") + field);
+                    return static_cast<size_t>(parsed);
+                };
+                CalibratedPeakSettings settings;
+                settings.model = argv[++i];
+                settings.step = number("step");
+                settings.minimumAreaMz = number("minimum area");
+                settings.minimumCoverage = number("minimum coverage");
+                settings.minScale = count("minimum scale");
+                settings.maxScale = count("maximum scale");
+                settings.alpha = number("alpha");
+                settings.rotations = count("rotations");
+                const bool module = settings.model.rfind("module:", 0) == 0 && settings.model.size() > 7;
+                if ((settings.model != "quadratic" && settings.model != "hyperbolic" && !module)
+                    || !(settings.step > 0 && settings.minimumAreaMz > 0)
+                    || (settings.model == "quadratic" && (settings.step != 1 || settings.maxScale > maxscale_global))
+                    || !(settings.minimumCoverage > 0 && settings.minimumCoverage < 1)
+                    || settings.minScale < 2 || settings.maxScale < settings.minScale
+                    || !(settings.alpha > 0 && settings.alpha < 1) || settings.rotations == 0)
+                    throw std::invalid_argument("Invalid --calibrated-peaks model, thresholds or window settings");
+                args.calibratedPeaks = std::move(settings);
             }
             else if (argument == "--folding-axis")
             {
@@ -399,7 +447,7 @@ namespace qAlgorithms
         if (!args.outputPath.empty() && !args.printCentroids && !args.printBins &&
             !args.printFeatures && !args.printProfileSection && !args.printCentroidsMZML &&
             !args.printComponentRegs && !args.printComponentBins && !args.printFeatCens && !args.printSubProfile &&
-            !args.peakFolding)
+            !args.peakFolding && !args.calibratedPeaks)
             args.printFeatures = true;
         if (args.outputPath.empty())
         {
@@ -507,6 +555,13 @@ namespace qAlgorithms
             (void)fprintf(stderr, "Error: folding-specific options require --peak-folding.\n");
             goodInputs = false;
         }
+        if (args.calibratedPeaks && (args.outputPath.empty() || args.peakFolding || args.printCentroids
+            || args.printCentroidsMZML || args.printBins || args.printFeatures || args.printProfileSection
+            || args.printSubProfile || args.printFeatCens || args.printComponentRegs || args.printComponentBins))
+        {
+            (void)fprintf(stderr, "Error: --calibrated-peaks requires -o and its own scan-level output.\n");
+            goodInputs = false;
+        }
 
         if (args.silent && args.verboseProgress)
         {
@@ -554,7 +609,7 @@ namespace qAlgorithms
             goodInputs = false;
         }
 
-        if (args.term == TerminateAfter::never && !args.outputPath.empty() && !args.peakFolding)
+        if (args.term == TerminateAfter::never && !args.outputPath.empty() && !args.peakFolding && !args.calibratedPeaks)
         {
             (void)fprintf(stderr, "Warning: no output files will be written.\n");
         }

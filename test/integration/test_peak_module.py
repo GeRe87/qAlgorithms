@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 
+from test_calibrated_peaks_cli import check_output, run_calibrated, write_calibrated_fixture
+
 
 def main():
     host_arg, cmake, generator, compiler, config, platform, toolset, ownership_test = sys.argv[1:]
@@ -113,6 +115,11 @@ def main():
         old_abi = search(samples, axis=(0, 1), module=validation_only)
         assert old_abi.returncode == 0 and "unmeasured=8,8," in old_abi.stdout and "peak=" not in old_abi.stdout
         subprocess.run([ownership_test, str(valid)], check=True)
+        mzml = build / "native profile.mzML"
+        write_calibrated_fixture(mzml)
+        output = build / "native output"
+        run_calibrated(host, mzml, output, f"module:{valid}")
+        check_output(output / "native profile_calibrated_peaks.csv", "native:external-gaussian-ols")
 
     assert hashlib.sha256(host.read_bytes()).hexdigest() == original_hash
     assert host.stat().st_mtime_ns == original_mtime
