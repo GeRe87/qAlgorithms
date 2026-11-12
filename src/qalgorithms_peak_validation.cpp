@@ -7,6 +7,8 @@
 #include <cmath>
 #include <stdexcept>
 
+// Fixed-window form, apex and area validation. Shared statistical tests
+// use the coefficient geometry supplied by the built-in model adapters below.
 namespace qAlgorithms
 {
     namespace peak_model
