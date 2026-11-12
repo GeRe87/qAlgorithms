@@ -311,6 +311,13 @@ static void test_decoder_errors_and_uncompressed_float()
     const std::string nonfinite = encoded_values(std::vector<double>{std::numeric_limits<double>::infinity()}, false);
     assert(decodeSpectrum(nonfinite.data(), nonfinite.size(), &output, 1, false, true) != 0 && output.empty(),
            "Non-finite input was accepted");
+
+    const std::vector<double> closeMasses{100, 100.00000001, 100.00000003};
+    const std::string precise = encoded_values(closeMasses, true);
+    std::vector<double> decodedMasses;
+    assert(decodeSpectrum(precise.data(), precise.size(), &decodedMasses, closeMasses.size(), true, true) == 0 &&
+               decodedMasses == closeMasses,
+           "The profile decoder must retain distinct m/z values below float resolution");
 }
 
 int main()

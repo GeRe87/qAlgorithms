@@ -3,6 +3,7 @@
 #include "qalgorithms_input_output.h"
 #include "qalgorithms_qbin.h"
 #include "qalgorithms_qpeaks.h"
+#include "qalgorithms_peak_fifo.h"
 #include "qalgorithms_peak_module.h"
 #include "qalgorithms_peak_search.h"
 #include "qalgorithms_peak_workflow.h"
@@ -263,6 +264,17 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
 
         std::vector<FeaturePeak> features;
         findFeatures(&bins, &retentionTimes, &features);
+        std::vector<std::optional<SharedMassFit>> massFits;
+        if (args.fifoFeatureMz)
+        {
+            massFits = refineFeatureMasses(inputFile, selectedIndices, centroids, bins, features);
+            if (!args.silent)
+            {
+                const auto refined = std::count_if(massFits.begin(), massFits.end(),
+                    [](const auto &fit) { return fit.has_value(); });
+                printf("    Joint profile m/z fits: %zu of %zu feature rows\n", static_cast<size_t>(refined), features.size());
+            }
+        }
         size_t unresolvedCount = 0;
         for (const auto &feature : features) unresolvedCount += !feature.unresolvedMaximaRT.empty();
         if (unresolvedCount)
@@ -271,7 +283,8 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
             (void)fprintf(stderr, "Warning: no features detected in %s; the feature CSV contains its header only.\n",
                           filename.c_str());
         if (args.printFeatures &&
-            !printFeatureList(&features, args.outputPath, filename, &bins, args.silent, args.noOverwrite))
+            !printFeatureList(&features, args.outputPath, filename, &bins, args.silent, args.noOverwrite,
+                              args.fifoFeatureMz ? &massFits : nullptr))
             throw std::runtime_error("Could not write the feature CSV.");
         if (!args.silent)
             printf("    produced %zu centroids, %zu bins and %zu features\n",

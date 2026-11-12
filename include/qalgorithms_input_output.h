@@ -75,6 +75,7 @@ namespace qAlgorithms
         double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
         size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
         std::optional<CalibratedPeakSettings> calibratedPeaks;
+        bool fifoFeatureMz = false;
 
         // progress reporting
         bool silent = false;
@@ -163,7 +164,8 @@ namespace qAlgorithms
                           std::filesystem::path pathOutput,
                           std::string filename,
                           const std::vector<EIC> *originalBins,
-                          bool silent, bool noOverwrite);
+                          bool silent, bool noOverwrite,
+                          const std::vector<std::optional<SharedMassFit>> *massFits = nullptr);
 
     void printFeatureCentroids(const std::vector<FeaturePeak> *peaktable,
                                std::filesystem::path pathOutput,
