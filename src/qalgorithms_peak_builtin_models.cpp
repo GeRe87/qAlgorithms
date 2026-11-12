@@ -1,5 +1,6 @@
 #include "detail/qalgorithms_peak_background.h"
 #include "detail/qalgorithms_peak_cascade.h"
+#include "detail/qalgorithms_peak_properties.h"
 
 #include <algorithm>
 #include <cmath>
@@ -166,12 +167,17 @@ namespace qAlgorithms
 
             template<typename Predict>
             PeakFormNoise estimateLogNoise(const std::vector<float> &logs, const std::vector<double> &x,
-                double alpha, Predict predict)
+                double alpha, Predict predict, CandidateFitOutput *output)
             {
                 double rss = 0;
                 for (size_t i = 0; i < logs.size(); ++i)
                 {
-                    const double residual = logs[i] - predict(x[i]);
+                    const double value = predict(x[i]);
+                    if (output)
+                    {
+                        output->logPrediction.push_back(value);
+                    }
+                    const double residual = logs[i] - value;
                     rss += residual * residual;
                 }
                 const size_t df = logs.size() - 4; // both single-trace fits have four parameters
@@ -198,8 +204,12 @@ namespace qAlgorithms
         }
 
         FullPeakCandidateValidation validatePeakCandidate(PeakModelKind model, const float *intensities,
-            size_t length, double fixedStep, const FullPeakCandidateOptions &options)
+            size_t length, double fixedStep, const FullPeakCandidateOptions &options, CandidateFitOutput *output)
         {
+            if (output)
+            {
+                *output = {};
+            }
             validateRequest(model, intensities, length, fixedStep, options.background);
             if (!(options.minimumArea > 0 && std::isfinite(options.minimumArea))
                 || !(options.minimumCoverage > 0 && options.minimumCoverage < 1)
@@ -228,7 +238,7 @@ namespace qAlgorithms
                     if (result.stages.geometry.apexSupport == PeakValidationStatus::passed)
                     {
                         result.logNoise = estimateLogNoise(peak.logs(), x, options.logAlpha,
-                            [&](double sample) { return Quadratic::logValue(&fit, sample); });
+                            [&](double sample) { return Quadratic::logValue(&fit, sample); }, output);
                         result.stages = validatePeakCandidate(fit, result.logNoise, minimum,
                             options.minimumCoverage, options.minimumArea);
                     }
@@ -242,7 +252,7 @@ namespace qAlgorithms
                         result.logNoise = estimateLogNoise(peak.logs(), x, options.logAlpha, [&](double sample)
                         {
                             return detail::hyperbolic::predict(c, fit.sharedSlope, sample * fixedStep);
-                        });
+                        }, output);
                         result.stages = validatePeakCandidate(fit, 0, peak.geometry(), result.logNoise, minimum,
                             options.minimumCoverage, options.minimumArea);
                     }
@@ -251,11 +261,26 @@ namespace qAlgorithms
                 {
                     shape.resize(length);
                     supported = peak.makeShape(fit, x, shape);
+                    if (output && supported)
+                    {
+                        if constexpr (std::is_same_v<Fit, RegCoeffs>)
+                        {
+                            output->properties = describeLogFit(fit, result.logNoise.logMse);
+                        }
+                        else
+                        {
+                            output->properties = describeLogFit(fit, peak.geometry(), result.logNoise.logMse);
+                        }
+                    }
                 }
             });
             result.status = peakCascadeStatus(result.stages);
             if (result.status != PeakValidationStatus::passed)
             {
+                if (output)
+                {
+                    *output = {};
+                }
                 return result;
             }
             result.background = runPeakBackground(values, x, shape, supported, [&](const auto &draw, auto &templateValues)
@@ -263,6 +288,10 @@ namespace qAlgorithms
                 return peak.evaluate(draw, x, templateValues);
             }, options.background);
             result.status = result.background.status;
+            if (output && result.status != PeakValidationStatus::passed)
+            {
+                *output = {};
+            }
             return result;
         }
     }

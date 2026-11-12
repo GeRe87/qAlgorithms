@@ -9,6 +9,7 @@ extern "C" {
 
 #define QALGORITHMS_PEAK_MODEL_ABI_V1 1u
 #define QALGORITHMS_PEAK_MODEL_ENTRY_V1 "qalgorithms_peak_model_v1"
+#define QALGORITHMS_PEAK_MODEL_PROPERTIES_V1 "qalgorithms_peak_model_properties_v1"
 
 /* Function results. The host owns all output buffers. */
 #define QALGORITHMS_PEAK_FAILED 0
@@ -68,6 +69,20 @@ typedef struct QAlgorithmsPeakModelV1
 } QAlgorithmsPeakModelV1;
 
 typedef const QAlgorithmsPeakModelV1 *(*QAlgorithmsPeakModelEntryV1)(void);
+
+/* Optional export qalgorithms_peak_model_properties_v1. It receives the
+ * original log-OLS fit and returns its apex, modeled total area and
+ * row-major position/area covariance in fit coordinates. It must not
+ * modify the fit or affect subsequent fits or rotation replay. */
+typedef struct QAlgorithmsPeakPropertiesV1
+{
+    double apex;
+    double area;
+    double covariance[4];
+} QAlgorithmsPeakPropertiesV1;
+
+typedef int32_t (*QAlgorithmsPeakModelPropertiesV1)(const void *fit, const QAlgorithmsPeakNoiseV1 *noise,
+    QAlgorithmsPeakPropertiesV1 *result);
 
 #ifdef __cplusplus
 }

@@ -79,12 +79,13 @@ namespace qAlgorithms
 
         enum class ApexSelectionStatus { selected, unsupported, insufficientCommonSupport, ambiguous, numericalFailure };
 
-        struct HyperbolicApexSelection
+        struct ApexSelection
         {
             size_t first = 0, last = 0; // observed maximum plateau
             ApexSelectionStatus status = ApexSelectionStatus::unsupported;
             size_t windowIndex = std::numeric_limits<size_t>::max(); // valid when selected
         };
+        using HyperbolicApexSelection = ApexSelection;
 
         struct AffineSampleAxis
         {
@@ -227,6 +228,25 @@ namespace qAlgorithms
             double backgroundAlphaPerWindow = 0;
             std::vector<CandidateSearchWindowResult> windows;
             std::vector<size_t> candidateIndices;
+            struct MeasuredProperties
+            {
+                double position, area;
+                std::array<double, 4> covariance; // row-major position, area
+            };
+            struct Measurement
+            {
+                ApexSelection selection;
+                // Missing for unresolved hypotheses and for selected fits
+                // without representable joint fixed-window covariance.
+                std::optional<MeasuredProperties> properties;
+            };
+            struct Measurements
+            {
+                AxisUnit axisUnit = AxisUnit::CallerDefined;
+                std::vector<Measurement> peaks;
+                std::vector<size_t> unassignedWindowIndices;
+            };
+            std::optional<Measurements> measurements;
         };
 
         // Prespecify all windows and models before seeing intensities. A window
@@ -246,7 +266,12 @@ namespace qAlgorithms
             CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha = .05,
                 std::vector<NativeCandidateModelWindows> nativeModels = {});
 
-            CandidateSearchResult evaluate(const float *intensities, size_t length) const;
+            // A supplied axis requests one representative per observed apex,
+            // across the accepted windows and models. The affine calibration
+            // must cover the full modeled peak. Covariance is conditional
+            // on the selected window, model and axis.
+            CandidateSearchResult evaluate(const float *intensities, size_t length,
+                const AffineSampleAxis *measurementAxis = nullptr) const;
 
         private:
             size_t length_, familySize_ = 0;
@@ -302,7 +327,8 @@ namespace qAlgorithms
         using ModelPeakSearchResult = std::variant<PiecewiseQuadraticSearchResult, HyperbolicSearchResult,
             SegmentedHyperbolicSearchResult>;
         ModelPeakSearchResult findPeaks(const PeakSearchRequest &request);
-        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length);
+        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length,
+            const AffineSampleAxis *measurementAxis = nullptr);
     }
 }
 

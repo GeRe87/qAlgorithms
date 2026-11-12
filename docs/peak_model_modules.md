@@ -71,3 +71,29 @@ Module-specific statistical stages keep their own assumptions.
 The integration test uses the separately built module in both a native-only
 family and a mixed family. It checks that adding the built-in model doubles
 the denominator and that windows containing zero remain counted.
+
+## Select and measure accepted peaks
+
+Add `--axis ORIGIN UNITS_PER_SAMPLE` after the optional quadratic settings
+and before the intensities. The origin addresses sample zero. Supply a
+signed affine scale valid over the full modeled peak.
+
+The search assigns accepted windows to observed maxima using their fitted
+apices. Windows assigned to the same maximum are compared on their common
+sample interval using raw-intensity squared error from the original log-OLS
+curves. Exact score ties and insufficient common support remain unresolved.
+The background test continues to use its own raw amplitude and background fit.
+
+A measured record includes the observed maximum, selected window index,
+position, modeled total area and the four entries of their covariance.
+Area uses intensity times the measurement coordinate. The covariance is
+conditional on a fixed window, model and affine calibration. It excludes
+cross-peak, calibration and selection uncertainty. The modeled area uses
+the original log fit, with the legacy continuous valley truncation for
+mixed quadratic flanks.
+
+A native module may export `qalgorithms_peak_model_properties_v1` with
+the signature in the ABI header. It supplies position, total area and
+their joint covariance from the same log-OLS fit. A validation-only module
+still participates in selection. A selected window without valid joint
+properties is reported as `unmeasured`.

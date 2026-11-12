@@ -375,12 +375,22 @@ static int runPeakModelModuleSearch(int argc, const char *argv[])
     {
         throw std::invalid_argument(
             "Usage: qAlgorithms --peak-model-module-search PATH STEP MIN_AREA MIN_COVERAGE ALPHA ROTATIONS "
-            "MIN_SCALE MAX_SCALE [--quadratic MIN_AREA MIN_COVERAGE] I0 I1 I2 I3 I4 [...]");
+            "MIN_SCALE MAX_SCALE [--quadratic MIN_AREA MIN_COVERAGE] [--axis ORIGIN UNITS_PER_SAMPLE] I0 I1 I2 I3 I4 [...]");
     }
     FullPeakCandidateOptions options{parsePeakModuleNumber(argv[4]), parsePeakModuleNumber(argv[5]), .05, {}};
     options.background.rotations = parsePeakModuleCount(argv[7]);
     const bool includeQuadratic = std::string_view(argv[10]) == "--quadratic";
-    const int sampleStart = includeQuadratic ? 13 : 10;
+    int sampleStart = includeQuadratic ? 13 : 10;
+    std::optional<AffineSampleAxis> axis;
+    if (argc > sampleStart && std::string_view(argv[sampleStart]) == "--axis")
+    {
+        if (argc < sampleStart + 8)
+        {
+            throw std::invalid_argument("Native model search requires an axis origin, scale and at least five intensities");
+        }
+        axis = AffineSampleAxis{parsePeakModuleNumber(argv[sampleStart + 1]), parsePeakModuleNumber(argv[sampleStart + 2])};
+        sampleStart += 3;
+    }
     if (argc < sampleStart + 5)
     {
         throw std::invalid_argument("Native model search requires at least five intensities");
@@ -398,7 +408,7 @@ static int runPeakModelModuleSearch(int argc, const char *argv[])
     auto module = std::make_shared<const NativePeakModel>(std::filesystem::path(argv[2]));
     const CandidateSearchPlan plan(raw.size(), std::move(builtins), parsePeakModuleNumber(argv[6]),
         {{std::move(module), parsePeakModuleNumber(argv[3]), options, windows}});
-    const auto result = findPeaks(plan, raw.data(), raw.size());
+    const auto result = findPeaks(plan, raw.data(), raw.size(), axis ? &*axis : nullptr);
     printf("familySize=%zu\nwindowAlpha=%.17g\ncandidates=%zu\n",
         result.familySize, result.backgroundAlphaPerWindow, result.candidateIndices.size());
     for (const auto &entry : result.windows)
@@ -407,6 +417,29 @@ static int runPeakModelModuleSearch(int argc, const char *argv[])
             entry.model ? "builtin:piecewise-quadratic" : nativePeakModelLabel(entry.nativeModelName).c_str(),
             entry.window.center, entry.window.scale,
             peakStatusName(entry.validation.status), peakStatusName(entry.validation.background.status), entry.adjustedBackgroundP);
+    }
+    if (result.measurements)
+    {
+        for (const auto &peak : result.measurements->peaks)
+        {
+            const auto &selection = peak.selection;
+            if (peak.properties)
+            {
+                const auto &p = *peak.properties;
+                printf("peak=%zu,%zu,%zu,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n",
+                    selection.first, selection.last, selection.windowIndex, p.position, p.area,
+                    p.covariance[0], p.covariance[1], p.covariance[2], p.covariance[3]);
+            }
+            else
+            {
+                printf("unmeasured=%zu,%zu,%zu,%d\n", selection.first, selection.last, selection.windowIndex,
+                    static_cast<int>(selection.status));
+            }
+        }
+        for (size_t index : result.measurements->unassignedWindowIndices)
+        {
+            printf("unassignedWindow=%zu\n", index);
+        }
     }
     return 0;
 }

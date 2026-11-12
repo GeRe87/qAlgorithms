@@ -9,6 +9,7 @@ namespace
     struct Gaussian
     {
         double intercept, slope, curvature, edge;
+        double interceptFactor, slopeFactor, curvatureFactor, interceptCurvature;
     };
 
     struct FitLifetime
@@ -43,7 +44,9 @@ namespace
         }
         const double n = static_cast<double>(length);
         const double curvature = (xxy - xx * sum / n) / (xxxx - xx * xx / n);
-        *output = new (std::nothrow) Gaussian{(sum - curvature * xx) / n, xy / xx, curvature, half * step};
+        const double determinant = n * xxxx - xx * xx;
+        *output = new (std::nothrow) Gaussian{(sum - curvature * xx) / n, xy / xx, curvature, half * step,
+            xxxx / determinant, 1 / xx, n / determinant, -xx / determinant};
         lifetime.live = *output != nullptr;
         if (lifetime.live && logs[0] < 0)
         {
@@ -131,3 +134,25 @@ extern "C" MODULE_EXPORT const QAlgorithmsPeakModelV1 *qalgorithms_peak_model_v1
         fitWindow, destroy, shape, apex, predict, formConfidence, area, coverage};
     return &model;
 }
+
+#ifndef VALIDATION_ONLY
+extern "C" MODULE_EXPORT int32_t qalgorithms_peak_model_properties_v1(
+    const void *fit, const QAlgorithmsPeakNoiseV1 *noise, QAlgorithmsPeakPropertiesV1 *out)
+{
+    const auto &g = *static_cast<const Gaussian *>(fit);
+    apex(fit, &out->apex);
+    out->area = std::exp(g.intercept - g.slope * g.slope / (4 * g.curvature))
+        * std::sqrt(std::acos(-1.0) / -g.curvature);
+    const double positionSlope = -1 / (2 * g.curvature);
+    const double positionCurve = g.slope / (2 * g.curvature * g.curvature);
+    const double areaSlope = out->area * out->apex;
+    const double areaCurve = out->area * (out->apex * out->apex - .5 / g.curvature);
+    out->covariance[0] = noise->log_mse * (positionSlope * positionSlope * g.slopeFactor
+        + positionCurve * positionCurve * g.curvatureFactor);
+    out->covariance[1] = out->covariance[2] = noise->log_mse * (positionSlope * areaSlope * g.slopeFactor
+        + positionCurve * (areaCurve * g.curvatureFactor + out->area * g.interceptCurvature));
+    out->covariance[3] = noise->log_mse * (out->area * out->area * g.interceptFactor + areaSlope * areaSlope * g.slopeFactor
+        + areaCurve * areaCurve * g.curvatureFactor + 2 * out->area * areaCurve * g.interceptCurvature);
+    return QALGORITHMS_PEAK_PASSED;
+}
+#endif

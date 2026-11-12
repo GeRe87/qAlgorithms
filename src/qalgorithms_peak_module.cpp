@@ -2,6 +2,7 @@
 #include "qalgorithms_peak_model_abi.h"
 #include "detail/qalgorithms_peak_background.h"
 #include "detail/qalgorithms_peak_cascade.h"
+#include "detail/qalgorithms_peak_properties.h"
 
 #include <algorithm>
 #include <cstring>
@@ -31,6 +32,25 @@ namespace qAlgorithms
             void *handle = nullptr;
 #endif
             const QAlgorithmsPeakModelV1 *model = nullptr;
+            QAlgorithmsPeakModelPropertiesV1 properties = nullptr;
+
+            template<typename Function>
+            Function symbol(const char *name) const
+            {
+                if (!handle)
+                {
+                    return nullptr;
+                }
+#ifdef _WIN32
+                const auto address = GetProcAddress(handle, name);
+                Function function = nullptr;
+                static_assert(sizeof(function) == sizeof(address), "Windows module function pointer size");
+                std::memcpy(&function, &address, sizeof(function));
+                return function;
+#else
+                return reinterpret_cast<Function>(dlsym(handle, name));
+#endif
+            }
 
             ~Module()
             {
@@ -134,17 +154,10 @@ namespace qAlgorithms
 #ifdef _WIN32
             module->handle = LoadLibraryExW(absolute.c_str(), nullptr,
                 LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            const auto symbol = module->handle == nullptr ? nullptr
-                : GetProcAddress(module->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1);
-            QAlgorithmsPeakModelEntryV1 entry = nullptr;
-            static_assert(sizeof(entry) == sizeof(symbol), "Windows module function pointer size");
-            std::memcpy(&entry, &symbol, sizeof(entry));
 #else
             module->handle = dlopen(absolute.c_str(), RTLD_NOW | RTLD_LOCAL);
-            const auto entry = module->handle == nullptr ? nullptr
-                : reinterpret_cast<QAlgorithmsPeakModelEntryV1>(
-                    dlsym(module->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1));
 #endif
+            const auto entry = module->symbol<QAlgorithmsPeakModelEntryV1>(QALGORITHMS_PEAK_MODEL_ENTRY_V1);
             if (entry == nullptr)
             {
                 throw std::runtime_error("Cannot load the peak model module or find its v1 entry point: " + absolute.string());
@@ -159,6 +172,7 @@ namespace qAlgorithms
                 throw std::runtime_error("Invalid v1 peak model module descriptor: " + absolute.string());
             }
             module->model = model;
+            module->properties = module->symbol<QAlgorithmsPeakModelPropertiesV1>(QALGORITHMS_PEAK_MODEL_PROPERTIES_V1);
             module_ = std::move(module);
         }
 
@@ -187,8 +201,12 @@ namespace qAlgorithms
         }
 
         FullPeakCandidateValidation NativePeakModel::validateCandidate(const float *intensities, size_t length,
-            double step, const FullPeakCandidateOptions &options) const
+            double step, const FullPeakCandidateOptions &options, CandidateFitOutput *output) const
         {
+            if (output)
+            {
+                *output = {};
+            }
             if (!module_)
             {
                 throw std::logic_error("Peak model module has been moved");
@@ -271,6 +289,24 @@ namespace qAlgorithms
             {
                 return result;
             }
+            if (output)
+            {
+                output->logPrediction = prediction;
+                if (module_->properties)
+                {
+                    const double nan = std::numeric_limits<double>::quiet_NaN();
+                    QAlgorithmsPeakPropertiesV1 props{nan, nan, {nan, nan, nan, nan}};
+                    const auto status = moduleStatus(module_->properties(fit.get(), &noise, &props));
+                    const std::array<double, 4> covariance{{props.covariance[0], props.covariance[1],
+                        props.covariance[2], props.covariance[3]}};
+                    const double tolerance = 8 * std::numeric_limits<double>::epsilon() * edge;
+                    if (status == PeakValidationStatus::passed && std::abs(props.apex - geometry.apex) <= tolerance
+                        && props.area > 0 && std::isfinite(props.area) && validPositionAreaCovariance(covariance))
+                    {
+                        output->properties = CandidateFitOutput::Properties{geometry.apex, props.area, covariance};
+                    }
+                }
+            }
             normalizeTemplate(prediction);
             fit.reset();
             result.background = runPeakBackground(raw, grid, prediction, true,
@@ -288,6 +324,10 @@ namespace qAlgorithms
                     return true;
                 }, options.background);
             result.status = result.background.status;
+            if (output && result.status != PeakValidationStatus::passed)
+            {
+                *output = {};
+            }
             return result;
         }
     }
