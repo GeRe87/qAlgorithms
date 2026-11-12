@@ -19,16 +19,19 @@ namespace qAlgorithms
         public:
             explicit NativePeakModel(const std::filesystem::path &path);
             ~NativePeakModel();
+            NativePeakModel(const NativePeakModel &) noexcept;
+            NativePeakModel &operator=(const NativePeakModel &) noexcept;
             NativePeakModel(NativePeakModel &&) noexcept;
             NativePeakModel &operator=(NativePeakModel &&) noexcept;
 
             std::string name() const;
+            size_t parameterCount() const;
             FullPeakCandidateValidation validateCandidate(const float *intensities, size_t length,
                 double step, const FullPeakCandidateOptions &options) const;
 
         private:
             struct Module;
-            std::unique_ptr<Module> module_;
+            std::shared_ptr<const Module> module_;
         };
     }
 }

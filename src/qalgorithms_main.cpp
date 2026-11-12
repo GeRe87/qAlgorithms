@@ -4,10 +4,12 @@
 #include "qalgorithms_qbin.h"
 #include "qalgorithms_qpeaks.h"
 #include "qalgorithms_peak_module.h"
+#include "qalgorithms_peak_search.h"
 #include "qalgorithms_read_file.h"
 
 #include <cstdio>
 #include <cctype>
+#include <charconv>
 #include <ctime>
 #include <exception>
 #include <algorithm>
@@ -273,6 +275,57 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         throw std::runtime_error("No MS1 profile spectra with a supported polarity were found. Centroid-only data is not supported.");
 }
 
+// Parse the explicit coordinates and thresholds used by native-model diagnostics.
+static double parsePeakModuleNumber(const std::string &value)
+{
+    size_t end = 0;
+    const double number = std::stod(value, &end);
+    if (end != value.size() || !std::isfinite(number))
+    {
+        throw std::invalid_argument("Expected a finite numeric module argument");
+    }
+    return number;
+}
+
+static size_t parsePeakModuleCount(std::string_view value)
+{
+    size_t number = 0;
+    const auto end = value.data() + value.size();
+    const auto parsed = std::from_chars(value.data(), end, number);
+    if (parsed.ec != std::errc{} || parsed.ptr != end)
+    {
+        throw std::invalid_argument("Expected a nonnegative integer module argument");
+    }
+    return number;
+}
+
+static std::vector<float> readPeakModuleSamples(int start, int argc, const char *argv[])
+{
+    std::vector<float> raw;
+    for (int i = start; i < argc; ++i)
+    {
+        const double value = parsePeakModuleNumber(argv[i]);
+        if (std::abs(value) > std::numeric_limits<float>::max())
+        {
+            throw std::invalid_argument("Intensity is outside the supported range");
+        }
+        raw.push_back(static_cast<float>(value));
+    }
+    return raw;
+}
+
+static const char *peakStatusName(peak_model::PeakValidationStatus value)
+{
+    switch (value)
+    {
+    case peak_model::PeakValidationStatus::passed: return "passed";
+    case peak_model::PeakValidationStatus::failed: return "failed";
+    case peak_model::PeakValidationStatus::notEvaluated: return "notEvaluated";
+    case peak_model::PeakValidationStatus::unavailable: return "unavailable";
+    }
+    return "unavailable";
+}
+
 // Diagnostic entry point for a prespecified window and an external model.
 static int runPeakModelModule(int argc, const char *argv[])
 {
@@ -281,44 +334,80 @@ static int runPeakModelModule(int argc, const char *argv[])
         throw std::invalid_argument(
             "Usage: qAlgorithms --peak-model-module PATH STEP MIN_AREA MIN_COVERAGE I0 I1 I2 I3 I4 [...]");
     }
-    const auto parse = [](const std::string &value)
-    {
-        size_t end = 0;
-        const double number = std::stod(value, &end);
-        if (end != value.size() || !std::isfinite(number))
-        {
-            throw std::invalid_argument("Expected a finite numeric module argument");
-        }
-        return number;
-    };
-    std::vector<float> raw;
-    for (int i = 6; i < argc; ++i)
-    {
-        const double value = parse(argv[i]);
-        if (std::abs(value) > std::numeric_limits<float>::max())
-        {
-            throw std::invalid_argument("Intensity is outside the supported range");
-        }
-        raw.push_back(static_cast<float>(value));
-    }
-    const peak_model::FullPeakCandidateOptions options{parse(argv[4]), parse(argv[5]), .05, {}};
+    const auto raw = readPeakModuleSamples(6, argc, argv);
+    const peak_model::FullPeakCandidateOptions options{parsePeakModuleNumber(argv[4]), parsePeakModuleNumber(argv[5]), .05, {}};
     const peak_model::NativePeakModel model{std::filesystem::path(argv[2])};
-    const auto result = model.validateCandidate(raw.data(), raw.size(), parse(argv[3]), options);
-    const auto status = [](peak_model::PeakValidationStatus value)
-    {
-        switch (value)
-        {
-        case peak_model::PeakValidationStatus::passed: return "passed";
-        case peak_model::PeakValidationStatus::failed: return "failed";
-        case peak_model::PeakValidationStatus::notEvaluated: return "notEvaluated";
-        case peak_model::PeakValidationStatus::unavailable: return "unavailable";
-        }
-        return "unavailable";
-    };
+    const auto result = model.validateCandidate(raw.data(), raw.size(), parsePeakModuleNumber(argv[3]), options);
     printf("model=%s\nstatus=%s\nform=%s\napex=%s\nformConfidence=%s\narea=%s\ncoverage=%s\nbackground=%s\n",
-        model.name().c_str(), status(result.status), status(result.stages.geometry.form),
-        status(result.stages.geometry.apexSupport), status(result.stages.formConfidence),
-        status(result.stages.areaEvidence.status), status(result.stages.windowCoverage.status), status(result.background.status));
+        model.name().c_str(), peakStatusName(result.status), peakStatusName(result.stages.geometry.form),
+        peakStatusName(result.stages.geometry.apexSupport), peakStatusName(result.stages.formConfidence),
+        peakStatusName(result.stages.areaEvidence.status), peakStatusName(result.stages.windowCoverage.status), peakStatusName(result.background.status));
+    return 0;
+}
+
+// Keep descriptor bytes from colliding with the window record delimiters.
+static std::string nativePeakModelLabel(const std::string &name)
+{
+    constexpr char hex[] = "0123456789ABCDEF";
+    std::string label = "native:";
+    for (unsigned char value : name)
+    {
+        if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
+            || value == '-' || value == '_' || value == '.')
+        {
+            label += static_cast<char>(value);
+        }
+        else
+        {
+            label += '%';
+            label += hex[value >> 4];
+            label += hex[value & 15];
+        }
+    }
+    return label;
+}
+
+// Run a uniform declared family, optionally including the quadratic baseline.
+static int runPeakModelModuleSearch(int argc, const char *argv[])
+{
+    using namespace peak_model;
+    if (argc < 15)
+    {
+        throw std::invalid_argument(
+            "Usage: qAlgorithms --peak-model-module-search PATH STEP MIN_AREA MIN_COVERAGE ALPHA ROTATIONS "
+            "MIN_SCALE MAX_SCALE [--quadratic MIN_AREA MIN_COVERAGE] I0 I1 I2 I3 I4 [...]");
+    }
+    FullPeakCandidateOptions options{parsePeakModuleNumber(argv[4]), parsePeakModuleNumber(argv[5]), .05, {}};
+    options.background.rotations = parsePeakModuleCount(argv[7]);
+    const bool includeQuadratic = std::string_view(argv[10]) == "--quadratic";
+    const int sampleStart = includeQuadratic ? 13 : 10;
+    if (argc < sampleStart + 5)
+    {
+        throw std::invalid_argument("Native model search requires at least five intensities");
+    }
+    const auto raw = readPeakModuleSamples(sampleStart, argc, argv);
+    const auto windows = makeUniformPeakSearchWindows(raw.size(), parsePeakModuleCount(argv[8]), parsePeakModuleCount(argv[9]));
+    std::vector<CandidateModelWindows> builtins;
+    if (includeQuadratic)
+    {
+        auto quadratic = options;
+        quadratic.minimumArea = parsePeakModuleNumber(argv[11]);
+        quadratic.minimumCoverage = parsePeakModuleNumber(argv[12]);
+        builtins.push_back({PeakModelKind::PiecewiseQuadratic, 1, quadratic, windows});
+    }
+    auto module = std::make_shared<const NativePeakModel>(std::filesystem::path(argv[2]));
+    const CandidateSearchPlan plan(raw.size(), std::move(builtins), parsePeakModuleNumber(argv[6]),
+        {{std::move(module), parsePeakModuleNumber(argv[3]), options, windows}});
+    const auto result = findPeaks(plan, raw.data(), raw.size());
+    printf("familySize=%zu\nwindowAlpha=%.17g\ncandidates=%zu\n",
+        result.familySize, result.backgroundAlphaPerWindow, result.candidateIndices.size());
+    for (const auto &entry : result.windows)
+    {
+        printf("window=%s,%zu,%zu,%s,%s,%.17g\n",
+            entry.model ? "builtin:piecewise-quadratic" : nativePeakModelLabel(entry.nativeModelName).c_str(),
+            entry.window.center, entry.window.scale,
+            peakStatusName(entry.validation.status), peakStatusName(entry.validation.background.status), entry.adjustedBackgroundP);
+    }
     return 0;
 }
 
@@ -329,6 +418,10 @@ int main(int argc, const char *argv[])
         if (argc > 1 && std::string_view(argv[1]) == "--peak-model-module")
         {
             return runPeakModelModule(argc, argv);
+        }
+        if (argc > 1 && std::string_view(argv[1]) == "--peak-model-module-search")
+        {
+            return runPeakModelModuleSearch(argc, argv);
         }
         UserInputSettings args = passCliArgs(argc, argv);
         if (!inputsAreSensible(args))

@@ -127,22 +127,23 @@ namespace qAlgorithms
             }
         }
 
-        NativePeakModel::NativePeakModel(const std::filesystem::path &path) : module_(std::make_unique<Module>())
+        NativePeakModel::NativePeakModel(const std::filesystem::path &path)
         {
+            auto module = std::make_shared<Module>();
             const auto absolute = std::filesystem::absolute(path);
 #ifdef _WIN32
-            module_->handle = LoadLibraryExW(absolute.c_str(), nullptr,
+            module->handle = LoadLibraryExW(absolute.c_str(), nullptr,
                 LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            const auto symbol = module_->handle == nullptr ? nullptr
-                : GetProcAddress(module_->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1);
+            const auto symbol = module->handle == nullptr ? nullptr
+                : GetProcAddress(module->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1);
             QAlgorithmsPeakModelEntryV1 entry = nullptr;
             static_assert(sizeof(entry) == sizeof(symbol), "Windows module function pointer size");
             std::memcpy(&entry, &symbol, sizeof(entry));
 #else
-            module_->handle = dlopen(absolute.c_str(), RTLD_NOW | RTLD_LOCAL);
-            const auto entry = module_->handle == nullptr ? nullptr
+            module->handle = dlopen(absolute.c_str(), RTLD_NOW | RTLD_LOCAL);
+            const auto entry = module->handle == nullptr ? nullptr
                 : reinterpret_cast<QAlgorithmsPeakModelEntryV1>(
-                    dlsym(module_->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1));
+                    dlsym(module->handle, QALGORITHMS_PEAK_MODEL_ENTRY_V1));
 #endif
             if (entry == nullptr)
             {
@@ -157,10 +158,13 @@ namespace qAlgorithms
             {
                 throw std::runtime_error("Invalid v1 peak model module descriptor: " + absolute.string());
             }
-            module_->model = model;
+            module->model = model;
+            module_ = std::move(module);
         }
 
         NativePeakModel::~NativePeakModel() = default;
+        NativePeakModel::NativePeakModel(const NativePeakModel &) noexcept = default;
+        NativePeakModel &NativePeakModel::operator=(const NativePeakModel &) noexcept = default;
         NativePeakModel::NativePeakModel(NativePeakModel &&) noexcept = default;
         NativePeakModel &NativePeakModel::operator=(NativePeakModel &&) noexcept = default;
 
@@ -171,6 +175,15 @@ namespace qAlgorithms
                 throw std::logic_error("Peak model module has been moved");
             }
             return module_->model->name;
+        }
+
+        size_t NativePeakModel::parameterCount() const
+        {
+            if (!module_)
+            {
+                throw std::logic_error("Peak model module has been moved");
+            }
+            return module_->model->parameter_count;
         }
 
         FullPeakCandidateValidation NativePeakModel::validateCandidate(const float *intensities, size_t length,

@@ -206,7 +206,7 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME test_peak_module
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_peak_module.py"
                 "$<TARGET_FILE:qAlgorithms>" "${CMAKE_COMMAND}" "${CMAKE_GENERATOR}" "${CMAKE_CXX_COMPILER}"
-                "$<CONFIG>" "${CMAKE_GENERATOR_PLATFORM}" "${CMAKE_GENERATOR_TOOLSET}")
+                "$<CONFIG>" "${CMAKE_GENERATOR_PLATFORM}" "${CMAKE_GENERATOR_TOOLSET}" "$<TARGET_FILE:test_peak_search>")
     set_tests_properties(test_peak_module PROPERTIES TIMEOUT 120)
 endif()
 endif()
