@@ -3,7 +3,7 @@ on:
   push:
     branches: [agent/peak-model-inference-stage-c]
   pull_request:
-    paths: ['include/qalgorithms_peak_inference.h', 'src/qalgorithms_peak_inference.cpp', 'test/test_peak_inference.cpp', 'include/qalgorithms_peak_validation.h', 'src/qalgorithms_peak_validation.cpp', 'test/test_peak_validation.cpp', 'experiments/peak_model_inference/**', '.github/workflows/peak-model-stage-c.yml']
+    paths: ['include/qalgorithms_peak_inference.h', 'src/qalgorithms_peak_inference.cpp', 'test/test_peak_inference.cpp', 'include/qalgorithms_peak_validation.h', 'src/qalgorithms_peak_validation.cpp', 'test/test_peak_validation.cpp', 'src/qalgorithms_peak_background.cpp', 'test/test_peak_background.cpp', 'experiments/peak_model_inference/**', '.github/workflows/peak-model-stage-c.yml']
 jobs:
   verify:
     runs-on: ubuntu-24.04
