@@ -122,7 +122,7 @@ namespace
         const auto &corrected = marginalResult.windows[2];
         require(corrected.validation.stages.windowCoverage.status == PeakValidationStatus::passed
             && corrected.validation.background.status == PeakValidationStatus::failed
-            && corrected.adjustedBackgroundP == 6 * p
+            && corrected.adjustedBackgroundP == std::min(1., 6 * p)
             && std::find(marginalResult.candidateIndices.begin(), marginalResult.candidateIndices.end(), 2)
                 == marginalResult.candidateIndices.end(),
             "A raw p below the nominal family alpha can fail after correction");
