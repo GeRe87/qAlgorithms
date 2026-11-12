@@ -47,7 +47,7 @@ namespace qAlgorithms
     /// @param maxscale up to which scale regressions should be attempted. The maximum peak width (in points) is maxscale * 2 + 1.
     //                  If maxscale would exceed the length of x or y, it is set to (the length of either -1) / 2.
     /// @param result All found peaks are appended to this vector.
-    /// @param unresolvedGroups nullptr preserves strict selection (also used by centroiding).
+    /// @param unresolvedGroups nullptr preserves strict selection in this API.
     ///        A supplied vector enables explicitly marked collective descriptions
     ///        when a single existing accepted fit covers the entire unresolved
     ///        envelope without replacing protected fits. Metadata is appended;
