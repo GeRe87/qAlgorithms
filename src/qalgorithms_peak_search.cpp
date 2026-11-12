@@ -476,6 +476,97 @@ namespace qAlgorithms
             return HyperbolicSearchPlan(length, fixedStep, std::move(windows), options);
         }
 
+        CandidateSearchPlan::CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha)
+            : length_(length), models_(std::move(models))
+        {
+            if (length < 5 || models_.empty() || !(familyAlpha > 0 && familyAlpha < 1))
+            {
+                throw std::invalid_argument("Invalid candidate search family");
+            }
+            std::sort(models_.begin(), models_.end(), [](const auto &a, const auto &b) { return a.model < b.model; });
+            for (size_t i = 0; i < models_.size(); ++i)
+            {
+                auto &model = models_[i];
+                const auto &options = model.options;
+                if ((model.model != PeakModelKind::PiecewiseQuadratic && model.model != PeakModelKind::Hyperbolic)
+                    || (i > 0 && models_[i - 1].model == model.model) || model.windows.empty()
+                    || !(model.fixedStep > 0 && std::isfinite(model.fixedStep))
+                    || (model.model == PeakModelKind::PiecewiseQuadratic && model.fixedStep != 1)
+                    || !(options.minimumArea > 0 && std::isfinite(options.minimumArea))
+                    || !(options.minimumCoverage > 0 && options.minimumCoverage < 1)
+                    || !(options.logAlpha > 0 && options.logAlpha < .5))
+                {
+                    throw std::invalid_argument("Invalid model in candidate search family");
+                }
+                std::sort(model.windows.begin(), model.windows.end(), windowLess);
+                for (size_t j = 0; j < model.windows.size(); ++j)
+                {
+                    const auto &window = model.windows[j];
+                    if (window.scale < 2 || window.center >= length || window.scale > window.center
+                        || window.scale > length - 1 - window.center
+                        || (model.model == PeakModelKind::PiecewiseQuadratic && window.scale > maxscale_global)
+                        || (j > 0 && !windowLess(model.windows[j - 1], window)))
+                    {
+                        throw std::invalid_argument("Invalid or duplicate candidate search window");
+                    }
+                }
+                if (model.windows.size() > std::numeric_limits<size_t>::max() - familySize_)
+                {
+                    throw std::invalid_argument("Candidate search family size overflow");
+                }
+                familySize_ += model.windows.size();
+            }
+            windowAlpha_ = familyAlpha / static_cast<double>(familySize_);
+            for (auto &model : models_)
+            {
+                const double minimumP = 1 / (1 + static_cast<double>(model.options.background.rotations));
+                if (minimumP > windowAlpha_)
+                {
+                    throw std::invalid_argument("Rotation budget cannot resolve the Bonferroni window alpha");
+                }
+                model.options.background.alpha = windowAlpha_;
+            }
+        }
+
+        CandidateSearchResult CandidateSearchPlan::evaluate(const float *intensities, size_t length) const
+        {
+            if (length != length_ || intensities == nullptr || !std::all_of(intensities, intensities + length_,
+                [](float value) { return std::isfinite(value); }))
+            {
+                throw std::invalid_argument("Candidate search requires a matching length and finite raw intensities");
+            }
+            CandidateSearchResult result;
+            result.familySize = familySize_;
+            result.backgroundAlphaPerWindow = windowAlpha_;
+            result.windows.reserve(familySize_);
+            for (const auto &model : models_)
+            {
+                for (const auto &window : model.windows)
+                {
+                    CandidateSearchWindowResult entry{model.model, window, {}};
+                    entry.validation = validatePeakCandidate(model.model, intensities + window.center - window.scale,
+                        2 * window.scale + 1, model.fixedStep, model.options);
+                    const auto &background = entry.validation.background;
+                    if (std::isfinite(background.constant.pValue) && std::isfinite(background.linear.pValue))
+                    {
+                        entry.adjustedBackgroundP = std::min(1.0, static_cast<double>(familySize_)
+                            * std::max(background.constant.pValue, background.linear.pValue));
+                    }
+                    if (entry.validation.status == PeakValidationStatus::passed)
+                    {
+                        result.candidateIndices.push_back(result.windows.size());
+                    }
+                    result.windows.push_back(std::move(entry));
+                }
+            }
+            return result;
+        }
+
+        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length)
+        {
+            return plan.evaluate(intensities, length);
+        }
+
         ModelPeakSearchResult findPeaks(const PeakSearchRequest &request)
         {
             switch (request.model)

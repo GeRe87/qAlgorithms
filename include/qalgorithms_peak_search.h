@@ -3,6 +3,7 @@
 
 #include "qalgorithms_peak_inference.h"
 #include "qalgorithms_intensity_segments.h"
+#include "qalgorithms_peak_validation.h"
 
 #include <variant>
 
@@ -153,6 +154,53 @@ namespace qAlgorithms
             size_t centerStride = 1,
             const HyperbolicSearchOptions &options = {});
 
+        struct CandidateModelWindows
+        {
+            PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
+            double fixedStep = 1;
+            FullPeakCandidateOptions options;
+            std::vector<PeakSearchWindow> windows;
+        };
+
+        struct CandidateSearchWindowResult
+        {
+            PeakModelKind model;
+            PeakSearchWindow window;
+            FullPeakCandidateValidation validation;
+            double adjustedBackgroundP = std::numeric_limits<double>::quiet_NaN();
+        };
+
+        struct CandidateSearchResult
+        {
+            size_t familySize = 0;
+            double backgroundAlphaPerWindow = 0;
+            std::vector<CandidateSearchWindowResult> windows;
+            std::vector<size_t> candidateIndices;
+        };
+
+        // Prespecify all windows and models before seeing intensities. A window
+        // tested with both models counts twice. At most one entry per model.
+        // Bonferroni applies to the raw-background stage across the full family,
+        // even when windows overlap. Earlier gates can only remove rejections.
+        // The guarantee assumes the fixed-window raw Gaussian null for each
+        // true null and independent random rotations within each test. Choose
+        // the seeds before inspecting the data. It does not calibrate log-stage
+        // claims, adaptive plans or multiple calls treated as a single family.
+        class CandidateSearchPlan
+        {
+        public:
+            // Uses familyAlpha in place of each model's background.alpha.
+            // The rotation budget per model must resolve familyAlpha/familySize.
+            CandidateSearchPlan(size_t length, std::vector<CandidateModelWindows> models, double familyAlpha = .05);
+
+            CandidateSearchResult evaluate(const float *intensities, size_t length) const;
+
+        private:
+            size_t length_, familySize_ = 0;
+            double windowAlpha_ = 0;
+            std::vector<CandidateModelWindows> models_;
+        };
+
         struct PiecewiseQuadraticSearchResult
         {
             int32_t status = 0; // qpeaks_find return value
@@ -189,6 +237,7 @@ namespace qAlgorithms
         using ModelPeakSearchResult = std::variant<PiecewiseQuadraticSearchResult, HyperbolicSearchResult,
             SegmentedHyperbolicSearchResult>;
         ModelPeakSearchResult findPeaks(const PeakSearchRequest &request);
+        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length);
     }
 }
 

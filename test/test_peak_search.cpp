@@ -21,6 +21,178 @@ namespace
         }
     }
 
+    void testCompleteCandidateFamily()
+    {
+        constexpr size_t length = 29;
+        constexpr double alpha = .05;
+        FullPeakCandidateOptions options{50, .65, .05, {}};
+        options.background.rotations = 399;
+        options.background.seed = 97;
+        const std::vector<PeakSearchWindow> windows = {{14, 8}, {2, 2}, {14, 7}};
+        const CandidateSearchPlan plan(length, {{PeakModelKind::Hyperbolic, .22, options, windows},
+            {PeakModelKind::PiecewiseQuadratic, 1, options, windows}}, alpha);
+        std::vector<float> raw(length);
+        bool quadraticPassed = false, hyperbolicPassed = false;
+        for (bool hyperbolicInput : {false, true})
+        {
+            for (size_t i = 0; i < length; ++i)
+            {
+                const double x = static_cast<double>(i) - 14, u = .22 * x;
+                const double shape = hyperbolicInput ? .9 * (1 - std::cosh(u)) + .06 * u - .09 * std::sinh(u)
+                    : -.045 * x * x;
+                raw[i] = static_cast<float>(800 * std::exp(shape + .003 * std::sin(2 * x)));
+            }
+            raw.front() = 0;
+            const auto result = findPeaks(plan, raw.data(), raw.size());
+            require(result.familySize == 6 && result.windows.size() == 6 && result.backgroundAlphaPerWindow == alpha / 6,
+                "The denominator includes overlapping windows, both models, and skipped windows");
+            require(result.windows[0].model == PeakModelKind::PiecewiseQuadratic
+                && result.windows[3].model == PeakModelKind::Hyperbolic
+                && result.windows[0].window.center == 2 && result.windows[1].window.scale == 7,
+                "Canonical model and window order");
+            auto adjusted = options;
+            adjusted.background.alpha = alpha / 6;
+            std::vector<size_t> expectedIndices;
+            for (size_t i = 0; i < result.windows.size(); ++i)
+            {
+                const auto &entry = result.windows[i];
+                const bool hyperbolic = entry.model == PeakModelKind::Hyperbolic;
+                const auto &window = entry.window;
+                const auto expected = validatePeakCandidate(entry.model, raw.data() + window.center - window.scale,
+                    2 * window.scale + 1, hyperbolic ? .22 : 1., adjusted);
+                require(entry.validation.status == expected.status
+                    && entry.validation.background.status == expected.background.status,
+                    "Family uses the complete cascade at the allocated window alpha");
+                if (window.center == 2)
+                {
+                    require(entry.validation.status == PeakValidationStatus::unavailable
+                        && std::isnan(entry.adjustedBackgroundP), "Skipped entries are retained without a p-value");
+                }
+                if (std::isfinite(expected.background.constant.pValue) && std::isfinite(expected.background.linear.pValue))
+                {
+                    const double p = std::max(expected.background.constant.pValue, expected.background.linear.pValue);
+                    require(entry.adjustedBackgroundP == std::min(1., 6 * p), "Adjusted p uses the entire family");
+                }
+                if (expected.status == PeakValidationStatus::passed)
+                {
+                    expectedIndices.push_back(i);
+                    if (hyperbolic)
+                    {
+                        hyperbolicPassed = true;
+                    }
+                    else
+                    {
+                        quadraticPassed = true;
+                    }
+                }
+            }
+            require(result.candidateIndices == expectedIndices, "Reported candidates use corrected acceptance only");
+        }
+        require(quadraticPassed && hyperbolicPassed, "Both kernels can return candidates through the family");
+        bool wrongLengthRejected = false;
+        try
+        {
+            (void)findPeaks(plan, raw.data(), raw.size() - 1);
+        }
+        catch (const std::invalid_argument &)
+        {
+            wrongLengthRejected = true;
+        }
+        require(wrongLengthRejected, "The input length must match the declared family");
+
+        // The synthetic fixture has a marginal raw p away from both zero and
+        // the grid minimum. Choose a threshold between the two decisions to
+        // test the arithmetic independently of the platform's RNG transform.
+        const std::vector<float> marginal = {160.681f, 61.353f, 116.598f, 115.069f, 128.003f, 98.5298f,
+            166.892f, 211.492f, 242.276f, 232.716f, 158.477f, 144.693f, 171.232f, 156.15f,
+            113.135f, 108.881f, 78.6989f};
+        std::fill(raw.begin(), raw.end(), 100);
+        std::copy(marginal.begin(), marginal.end(), raw.begin() + 6);
+        FullPeakCandidateOptions marginalOptions{.001, .01, .49, {}};
+        marginalOptions.background.rotations = 1999;
+        marginalOptions.background.seed = 97;
+        const auto nominal = validatePeakCandidate(PeakModelKind::PiecewiseQuadratic, marginal.data(), marginal.size(),
+            1, marginalOptions);
+        const double p = std::max(nominal.background.constant.pValue, nominal.background.linear.pValue);
+        require(nominal.stages.windowCoverage.status == PeakValidationStatus::passed && p >= .001 && p < .2,
+            "Marginal regression fixture reaches the raw comparison");
+        const CandidateSearchPlan marginalPlan(length, {{PeakModelKind::PiecewiseQuadratic, 1, marginalOptions, windows},
+            {PeakModelKind::Hyperbolic, .22, marginalOptions, windows}}, 3 * p);
+        const auto marginalResult = findPeaks(marginalPlan, raw.data(), raw.size());
+        const auto &corrected = marginalResult.windows[2];
+        require(corrected.validation.stages.windowCoverage.status == PeakValidationStatus::passed
+            && corrected.validation.background.status == PeakValidationStatus::failed
+            && corrected.adjustedBackgroundP == 6 * p
+            && std::find(marginalResult.candidateIndices.begin(), marginalResult.candidateIndices.end(), 2)
+                == marginalResult.candidateIndices.end(),
+            "A raw p below the nominal family alpha can fail after correction");
+
+        auto rejects = [&](CandidateModelWindows model)
+        {
+            try
+            {
+                (void)CandidateSearchPlan(length, {std::move(model)}, alpha);
+                return false;
+            }
+            catch (const std::invalid_argument &)
+            {
+                return true;
+            }
+        };
+        require(rejects({PeakModelKind::PiecewiseQuadratic, 1, options, {{14, 8}, {14, 8}}}),
+            "Duplicate hypotheses within one model are rejected");
+        options.background.rotations = 20;
+        require(rejects({PeakModelKind::PiecewiseQuadratic, 1, options, windows}),
+            "The finite rotation grid must resolve the corrected threshold");
+    }
+
+    void testRawBackgroundNullFamily()
+    {
+        constexpr size_t length = 23, trials = 192;
+        constexpr double alpha = .05;
+        FullPeakCandidateOptions options{.001, .01, .25, {}};
+        options.background.rotations = 199;
+        options.background.seed = 517;
+        const std::vector<PeakSearchWindow> windows = {{9, 4}, {11, 5}, {13, 4}};
+        const std::vector<CandidateModelWindows> models = {{PeakModelKind::PiecewiseQuadratic, 1, options, windows},
+            {PeakModelKind::Hyperbolic, .35, options, windows}};
+        const CandidateSearchPlan plan(length, models, alpha);
+        std::mt19937_64 engine(228);
+        std::normal_distribution<double> noise(0, 5);
+        std::vector<float> raw(length);
+        for (double slope : {0., .6})
+        {
+            size_t nominal = 0, corrected = 0, candidates = 0;
+            for (size_t trial = 0; trial < trials; ++trial)
+            {
+                for (size_t i = 0; i < length; ++i)
+                {
+                    raw[i] = static_cast<float>(30 + slope * (static_cast<double>(i) - 11) + noise(engine));
+                }
+                double smallest = 1;
+                for (const auto &model : models)
+                {
+                    for (const auto &window : windows)
+                    {
+                        const auto background = validatePeakBackground(model.model, raw.data() + window.center - window.scale,
+                            2 * window.scale + 1, model.fixedStep, options.background);
+                        smallest = std::min(smallest, std::max(background.constant.pValue, background.linear.pValue));
+                    }
+                }
+                const bool anyCorrected = smallest <= alpha / 6;
+                const auto result = findPeaks(plan, raw.data(), raw.size());
+                require(result.candidateIndices.empty() || anyCorrected,
+                    "Early stages cannot add a raw-null rejection to the corrected family");
+                nominal += smallest <= alpha;
+                corrected += anyCorrected;
+                candidates += !result.candidateIndices.empty();
+            }
+            require(corrected <= 21 && corrected <= nominal, "Overlapping raw-null family must not strongly over-reject");
+            std::cout << "Raw null slope=" << slope << ", families=" << trials << ", nominal=" << nominal
+                      << ", corrected=" << corrected << ", full cascade=" << candidates << '\n';
+        }
+    }
+
     void testModelDispatch()
     {
         constexpr size_t length = 41;
@@ -351,6 +523,8 @@ int main()
     try
     {
         testModelDispatch();
+        testCompleteCandidateFamily();
+        testRawBackgroundNullFamily();
         testFamilyAndAmbiguity();
         testTransitiveAndTouchingOverlap();
         testPlanValidationAndGrid();
