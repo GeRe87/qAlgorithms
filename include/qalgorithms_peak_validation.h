@@ -2,6 +2,7 @@
 #define QALGORITHMS_PEAK_VALIDATION_H
 
 #include "qalgorithms_peak_fit.h"
+#include <optional>
 
 namespace qAlgorithms
 {
@@ -23,10 +24,19 @@ namespace qAlgorithms
             double alpha = .05;
         };
 
+        struct PeakWindowCoverage
+        {
+            PeakValidationStatus status = PeakValidationStatus::unavailable;
+            double fraction = std::numeric_limits<double>::quiet_NaN();
+            double standardError = std::numeric_limits<double>::quiet_NaN();
+            double lowerConfidenceBound = std::numeric_limits<double>::quiet_NaN();
+        };
+
         struct PeakCandidateValidation
         {
             PeakGeometryValidation geometry;
             PeakValidationStatus formConfidence = PeakValidationStatus::notEvaluated;
+            PeakWindowCoverage windowCoverage{PeakValidationStatus::notEvaluated};
         };
 
         // Form uses shape coefficients alone. Quadratic mixed tails refer to
@@ -53,11 +63,26 @@ namespace qAlgorithms
             const HyperbolicModel::Geometry &geometry, double logMse, size_t residualDf, double alpha = .05);
 
         // Run the common ordered stages, stopping at the first non-pass.
+        // Coverage is evaluated when a minimum is explicitly supplied.
         PeakCandidateValidation validatePeakCandidate(const RegCoeffs &coefficients,
-            const PeakFormNoise &noise, size_t minimumSamplesPerSide = 2);
+            const PeakFormNoise &noise, size_t minimumSamplesPerSide = 2,
+            std::optional<double> minimumCoverage = std::nullopt);
         PeakCandidateValidation validatePeakCandidate(const HyperbolicModel::Fit &fit, size_t trace,
             const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise,
-            size_t minimumSamplesPerSide = 2);
+            size_t minimumSamplesPerSide = 2, std::optional<double> minimumCoverage = std::nullopt);
+
+        // Fraction of fitted area between the first and last sample. The
+        // quadratic denominator uses the legacy peak domain (positive
+        // curvature flanks end at their continuous valley). Hyperbolic uses
+        // the whole real line. An affine axis scale and the amplitude cancel.
+        // Pass if the approximate one-sided, fixed-window delta-method lower
+        // bound meets the caller's minimumFraction (0 < minimumFraction < 1,
+        // 0 < alpha < .5). Same noise contract as form confidence. A saturated
+        // fraction or unresolved derivative can leave the bound unavailable.
+        PeakWindowCoverage validatePeakWindowCoverage(const RegCoeffs &coefficients,
+            const PeakFormNoise &noise, double minimumFraction);
+        PeakWindowCoverage validatePeakWindowCoverage(const HyperbolicModel::Fit &fit, size_t trace,
+            const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise, double minimumFraction);
     }
 }
 
