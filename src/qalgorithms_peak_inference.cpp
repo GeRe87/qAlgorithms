@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_inference.h"
+#include "qalgorithms_peak_validation.h"
 #include "detail/qalgorithms_peak_inference.h"
 
 #include <algorithm>
@@ -232,26 +233,23 @@ namespace qAlgorithms
                 output.status = InferenceStatus::invalidFit;
                 return output;
             }
-            std::vector<double> u(count);
-            for (size_t i = 0; i < count; ++i)
-            {
-                u[i] = fixedStep * (static_cast<double>(i) - static_cast<double>(scale));
-            }
             if (supportedOnly)
             {
                 for (const auto &peak : fit.locals)
                 {
-                    const double apex = hyperbolic::apexU(peak, fit.sharedSlope);
-                    const auto left = std::lower_bound(u.begin(), u.end(), apex) - u.begin();
-                    const auto right = u.end() - std::upper_bound(u.begin(), u.end(), apex);
-                    if (!std::isfinite(apex) || std::abs(apex) > geometry.edgeU
-                        || static_cast<size_t>(left) < options.minimumSamplesPerSide
-                        || static_cast<size_t>(right) < options.minimumSamplesPerSide)
+                    const auto validation = validatePeakGeometry(peak, fit.sharedSlope, scale, fixedStep,
+                        options.minimumSamplesPerSide);
+                    if (validation.apexSupport != PeakValidationStatus::passed)
                     {
                         output.status = InferenceStatus::screenedOut;
                         return output;
                     }
                 }
+            }
+            std::vector<double> u(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                u[i] = fixedStep * (static_cast<double>(i) - static_cast<double>(scale));
             }
             std::vector<hyperbolic::Moments> moments(traces);
             for (size_t j = 0; j < traces; ++j)
