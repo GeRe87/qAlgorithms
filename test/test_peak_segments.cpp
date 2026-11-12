@@ -149,7 +149,7 @@ int main()
             x[i] += 2;
         }
         const HyperbolicSearchPlan dispatchPlan(23, .2, {{11, 4}, {11, 5}, {15, 3}}, options);
-        const PeakSearchRequest::Segmentation segmentation{x.data(), 1};
+        PeakSearchRequest::Segmentation segmentation{x.data(), 1};
         PeakSearchRequest request;
         request.model = PeakModelKind::Hyperbolic;
         request.intensity = b.data();
@@ -180,6 +180,12 @@ int main()
             && dispatched.apexGroups.front().maxima.front().windowIndices == group.windowIndices,
             "Different scales at the same observed maximum remain one hypothesis");
         require(result.apexGroups.empty(), "Apex hypotheses require a single observed trace");
+        require(dispatched.apexSelections.empty(), "Representative selection is opt-in");
+        segmentation.selectRepresentatives = true;
+        const auto selected = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
+        require(selected.apexSelections.size() == 1
+            && selected.apexSelections.front().status == ApexSelectionStatus::selected,
+            "The common entry point selects one representative of an isolated peak");
 
         std::vector<float> doublePeak(33, 0);
         std::vector<double> doubleGrid(doublePeak.size());
@@ -200,8 +206,77 @@ int main()
             && maxima[1].first == 21 && maxima[1].last == 21 && maxima[1].windowIndices == std::vector<size_t>{2, 3},
             "Observed plateaus are counted once and retain their supporting fits");
         const auto screened = doublePlan.evaluateSegmented({{doublePeak.data(), doubleGrid.data(), doublePeak.size()}},
-            1, 0, e, SegmentedInferenceDetail::supportedWindows);
+            1, 0, e, SegmentedInferenceDetail::supportedWindows, true);
         require(screened.diagnosticIndices == doubleResult.diagnosticIndices, "Screen preserves the supported fits");
+        require(screened.apexSelections.size() == 2
+            && screened.apexSelections[0].first == 9 && screened.apexSelections[0].status == ApexSelectionStatus::selected
+            && screened.apexSelections[0].windowIndex < 2
+            && screened.apexSelections[1].first == 21 && screened.apexSelections[1].status == ApexSelectionStatus::selected
+            && screened.apexSelections[1].windowIndex >= 2 && screened.apexSelections[1].windowIndex < 4,
+            "Representative selection retains both resolved maxima");
+        auto referenceScore = [&](size_t index, size_t start, size_t end)
+        {
+            const auto window = doublePlan.windows()[index];
+            const size_t count = 2 * window.scale + 1;
+            const float *observed = doublePeak.data() + window.center - window.scale;
+            std::vector<float> logs(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                logs[i] = static_cast<float>(std::log(static_cast<double>(observed[i])));
+            }
+            double score = std::numeric_limits<double>::quiet_NaN();
+            forEachPeakFit({PeakModelKind::Hyperbolic, {logs.data()}, count, window.scale, .35},
+                [&](const PeakFitView &view)
+                {
+                    const auto &fit = *std::get<const HyperbolicModel::Fit *>(view);
+                    if (fit.center != window.scale || fit.scale != window.scale)
+                    {
+                        return;
+                    }
+                    std::vector<double> shape(count);
+                    double cross = 0, norm = 0;
+                    for (size_t i = 0; i < count; ++i)
+                    {
+                        const double u = .35 * (static_cast<double>(i) - static_cast<double>(window.scale));
+                        shape[i] = std::exp(fit.sharedSlope * u - fit.locals[0].curvature * std::cosh(u)
+                            - fit.locals[0].skew * std::sinh(u));
+                        cross += shape[i] * observed[i];
+                        norm += shape[i] * shape[i];
+                    }
+                    score = 0;
+                    for (size_t i = start; i <= end; ++i)
+                    {
+                        const double error = doublePeak[i] - cross / norm * shape[i - (window.center - window.scale)];
+                        score += error * error;
+                    }
+                });
+            return score;
+        };
+        require((referenceScore(0, 5, 15) < referenceScore(1, 5, 15) ? 0u : 1u)
+                == screened.apexSelections[0].windowIndex
+            && (referenceScore(2, 16, 26) < referenceScore(3, 16, 26) ? 2u : 3u)
+                == screened.apexSelections[1].windowIndex,
+            "Selection agrees with an independent amplitude fit and common-sample SSE");
+        const HyperbolicSearchPlan singletonPlan(doublePeak.size(), .35, {{10, 5}});
+        const auto singleton = singletonPlan.evaluateSegmented({{doublePeak.data(), doubleGrid.data(), doublePeak.size()}},
+            1, 0, e, SegmentedInferenceDetail::supportedWindows, true);
+        require(singleton.diagnosticGroups.empty() && singleton.apexSelections.size() == 1
+            && singleton.apexSelections.front().status == ApexSelectionStatus::selected
+            && singleton.apexSelections.front().windowIndex == 0, "A lone diagnostic fit can represent a maximum");
+        auto narrowPeak = doublePeak;
+        for (size_t i = 4; i <= 27; ++i)
+        {
+            const double u = .35 * (static_cast<double>(i) - 10.25);
+            narrowPeak[i] = static_cast<float>(std::exp(9 - std::cosh(u) + .001 * std::sin(2 * u)));
+        }
+        HyperbolicSearchOptions narrowOptions;
+        narrowOptions.minimumSamplesPerSide = 1;
+        const HyperbolicSearchPlan narrowPlan(doublePeak.size(), .35, {{9, 2}, {12, 3}}, narrowOptions);
+        const auto narrow = narrowPlan.evaluateSegmented({{narrowPeak.data(), doubleGrid.data(), narrowPeak.size()}},
+            1, 0, e, SegmentedInferenceDetail::supportedWindows, true);
+        require(narrow.apexSelections.size() == 1 && narrow.apexSelections.front().first == 10
+            && narrow.apexSelections.front().status == ApexSelectionStatus::insufficientCommonSupport,
+            "Windows with a three-sample intersection remain unresolved");
         for (size_t index : screened.diagnosticIndices)
         {
             const auto &actual = screened.search.windows[index].inference;
