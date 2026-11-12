@@ -207,6 +207,10 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_fifo_feature_mz.py"
                 "$<TARGET_FILE:qAlgorithms>")
     set_tests_properties(test_fifo_feature_mz PROPERTIES TIMEOUT 120)
+    add_test(NAME test_superspectrum_cli
+        COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_superspectrum_cli.py"
+                "$<TARGET_FILE:qAlgorithms>")
+    set_tests_properties(test_superspectrum_cli PROPERTIES TIMEOUT 120)
     add_test(NAME test_folding_cli
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_folding_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")

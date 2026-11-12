@@ -209,6 +209,13 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         if (retentionTimes.size() != selectedIndices.size())
             throw std::runtime_error("Could not read retention times for the selected spectra.");
 
+        if (args.superspectrum)
+        {
+            const auto output = std::filesystem::path(args.outputPath) / (filename + "_superspectrum_centroids.csv");
+            processSuperspectra(inputFile, selectedIndices, retentionTimes, output, *args.superspectrum, args.noOverwrite);
+            ++processedPolarities;
+            continue;
+        }
         if (args.peakFolding)
         {
             processFoldingSpectra(inputFile, selectedIndices, retentionTimes,

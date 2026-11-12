@@ -64,6 +64,8 @@ namespace qAlgorithms
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
         "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
+        "      --superspectrum GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
+        "                                   Fit joint centroids in rolling five-scan MS1 profile windows.\n"
         "      --peak-folding              : Experimental scan-wise folding of isolated MS1 profile peaks.\n"
         "                                    Outputs <input>_folding.csv, NOT a validated feature list.\n"
         "      --folding-axis <tof|orbitrap>: Required with --peak-folding. TOF uses sqrt(m/z);\n"
@@ -243,6 +245,26 @@ namespace qAlgorithms
             else if (argument == "--peak-folding")
             {
                 args.peakFolding = true;
+            }
+            else if (argument == "--superspectrum")
+            {
+                if (argc - i <= 3 || args.superspectrum)
+                    throw std::invalid_argument("--superspectrum requires GRID_STEP MAX_GAP MAX_HALF_WIDTH");
+                auto positive = [&](const char *field)
+                {
+                    const std::string value = argv[++i];
+                    size_t end = 0;
+                    const double parsed = std::stod(value, &end);
+                    if (end != value.size() || !(parsed > 0 && std::isfinite(parsed)))
+                        throw std::invalid_argument(std::string("Invalid superspectrum ") + field);
+                    return parsed;
+                };
+                const double step = positive("grid step");
+                const double gap = positive("maximum gap");
+                const double width = positive("maximum half-width");
+                if (width < 2 || width > maxscale_global || std::floor(width) != width)
+                    throw std::invalid_argument("Superspectrum maximum half-width must be an integer in the compiled scale range");
+                args.superspectrum = SuperspectrumSettings{step, gap, static_cast<size_t>(width)};
             }
             else if (argument == "--calibrated-peaks")
             {
@@ -452,7 +474,7 @@ namespace qAlgorithms
         if (!args.outputPath.empty() && !args.printCentroids && !args.printBins &&
             !args.printFeatures && !args.printProfileSection && !args.printCentroidsMZML &&
             !args.printComponentRegs && !args.printComponentBins && !args.printFeatCens && !args.printSubProfile &&
-            !args.peakFolding && !args.calibratedPeaks)
+            !args.peakFolding && !args.calibratedPeaks && !args.superspectrum)
             args.printFeatures = true;
         if (args.outputPath.empty())
         {
@@ -574,6 +596,14 @@ namespace qAlgorithms
             (void)fprintf(stderr, "Error: --fifo-feature-mz requires standard feature CSV output (-o, optionally --printfeatures).\n");
             goodInputs = false;
         }
+        if (args.superspectrum && (args.outputPath.empty() || args.peakFolding || args.calibratedPeaks
+            || args.fifoFeatureMz || args.printCentroids || args.printCentroidsMZML || args.printBins
+            || args.printFeatures || args.printProfileSection || args.printSubProfile
+            || args.printFeatCens || args.printComponentRegs || args.printComponentBins))
+        {
+            (void)fprintf(stderr, "Error: --superspectrum requires -o and its own centroid output.\n");
+            goodInputs = false;
+        }
 
         if (args.silent && args.verboseProgress)
         {
@@ -621,7 +651,8 @@ namespace qAlgorithms
             goodInputs = false;
         }
 
-        if (args.term == TerminateAfter::never && !args.outputPath.empty() && !args.peakFolding && !args.calibratedPeaks)
+        if (args.term == TerminateAfter::never && !args.outputPath.empty() && !args.peakFolding &&
+            !args.calibratedPeaks && !args.superspectrum)
         {
             (void)fprintf(stderr, "Warning: no output files will be written.\n");
         }

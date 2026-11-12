@@ -183,7 +183,7 @@ namespace qAlgorithms
     void forEachCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         size_t length,
-        const SharedShapeFitVisitor &visit);
+        const SharedShapeFitVisitor &visit, size_t maxHalfWidth = 0);
 
     // Collecting equivalent of the streaming API. Output order is scale-major,
     // matching findCoefficients; memory is proportional to the result size.

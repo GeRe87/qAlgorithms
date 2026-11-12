@@ -3,6 +3,7 @@
 
 #include "qalgorithms_datatypes.h"
 #include "qalgorithms_logging.h"
+#include "qalgorithms_superspectrum.h"
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -75,6 +76,7 @@ namespace qAlgorithms
         double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
         size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
         std::optional<CalibratedPeakSettings> calibratedPeaks;
+        std::optional<SuperspectrumSettings> superspectrum;
         bool fifoFeatureMz = false;
 
         // progress reporting

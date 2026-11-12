@@ -1469,7 +1469,7 @@ namespace qAlgorithms
     void forEachCoefficientsMultiTrace(
         const std::vector<const float *> &logTraces,
         const size_t length,
-        const SharedShapeFitVisitor &visit)
+        const SharedShapeFitVisitor &visit, size_t maxHalfWidth)
     {
         if (logTraces.empty() || length < MINLENGTH || !visit)
             throw std::invalid_argument("Shared-shape regression requires traces, at least five samples and a visitor");
@@ -1479,7 +1479,8 @@ namespace qAlgorithms
 
         const size_t traceCount = logTraces.size();
         const double invTraceCount = 1.0 / static_cast<double>(traceCount);
-        const size_t maxScale = std::min(maxscale_global, (length - 1) / 2);
+        const size_t limit = maxHalfWidth == 0 ? maxscale_global : std::min(maxHalfWidth, maxscale_global);
+        const size_t maxScale = std::min(limit, (length - 1) / 2);
 
         std::vector<double> sum0(traceCount, 0.0);
         SharedShapeRegCoeffs fit;
