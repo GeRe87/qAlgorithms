@@ -107,11 +107,100 @@ static void testWindowCoverage()
         "A nonintegrable hyperbolic fit has no coverage decision");
 }
 
+static void testAreaEvidence()
+{
+    using Quadratic = Model<PeakModelKind::PiecewiseQuadratic>;
+    const PeakFormNoise noise{1e-6, 1};
+    const double critical = std::tan((.5 - noise.alpha / 8) * std::acos(-1.0));
+    RegCoeffs quadratic;
+    quadratic.b0 = 5;
+    quadratic.b2 = quadratic.b3 = -.3;
+    quadratic.scale = 2;
+    const auto q = validatePeakAreaEvidence(quadratic, noise, 100);
+    const auto radius = [&](size_t i)
+    {
+        double gradient[4] = {};
+        gradient[i] = 1;
+        return critical * std::sqrt(noise.logMse * Quadratic::covarianceProjection(gradient, quadratic.scale));
+    };
+    const double intercept = quadratic.b0 - radius(0), slope = radius(1), curve = quadratic.b2 - radius(2);
+    const double qEnvelope = midpointIntegral([&](double x)
+    {
+        return std::exp(intercept - slope * std::abs(x) + curve * x * x);
+    }, -2, 2);
+    const double qBound = std::exp(q.logLowerBound);
+    require(q.status == PeakValidationStatus::passed && q.shapeCertified && q.left == -2 && q.right == 2
+        && qBound < qEnvelope && qBound / qEnvelope > .999, "Quadratic lower bound matches an independently integrated confidence envelope");
+    require(validatePeakAreaEvidence(quadratic, noise, 1000).status == PeakValidationStatus::failed,
+        "Area below a larger practical minimum is not established");
+    const auto gated = validatePeakCandidate(quadratic, noise, 2, .5, 1000);
+    require(gated.areaEvidence.status == PeakValidationStatus::failed
+        && gated.windowCoverage.status == PeakValidationStatus::notEvaluated, "Area evidence precedes coverage in the common cascade");
+    quadratic.b0 += 1000;
+    require(std::abs(validatePeakAreaEvidence(quadratic, noise, 100).logLowerBound - q.logLowerBound - 1000) < 1e-12,
+        "Log area stays usable when the raw amplitude overflows");
+
+    RegCoeffs mixed;
+    mixed.b0 = 5;
+    mixed.b1 = .4;
+    mixed.b2 = .2;
+    mixed.b3 = -.15;
+    mixed.scale = 4;
+    const auto clipped = validatePeakAreaEvidence(mixed, {1e-7, 5}, 50);
+    require(clipped.status == PeakValidationStatus::passed && clipped.left > -1 && clipped.left < 0 && clipped.right == 4,
+        "The certified mixed-tail interval ends before every plausible quadratic valley");
+
+    const HyperbolicModel::Geometry geometry(2, .7);
+    HyperbolicModel::Fit fit;
+    fit.scale = 2;
+    fit.identifiable = true;
+    fit.sharedSlope = .2;
+    fit.locals = {{6, 1.2, .1}};
+    const auto h = validatePeakAreaEvidence(fit, 0, geometry, noise, 50);
+    const auto &g = geometry.at(2);
+    const auto hyperRadius = [&](size_t i)
+    {
+        return critical * std::sqrt(noise.logMse * hyperbolicCovarianceFactor(g, 1, i, i));
+    };
+    const double hEnvelope = midpointIntegral([&](double u)
+    {
+        return std::exp(6 - hyperRadius(1) + .2 * u - hyperRadius(0) * std::abs(u)
+            - (1.2 + hyperRadius(2)) * std::cosh(u) - .1 * std::sinh(u) - hyperRadius(3) * std::abs(std::sinh(u)));
+    }, -1.4, 1.4);
+    const double hBound = std::exp(h.logLowerBound);
+    require(h.status == PeakValidationStatus::passed && h.shapeCertified && hBound < hEnvelope && hBound / hEnvelope > .999,
+        "Hyperbolic lower bound matches an independently integrated confidence envelope");
+    fit.locals.push_back({8, 1.5, -.25});
+    const auto pooled = validatePeakAreaEvidence(fit, 1, geometry, {1e-6, 3}, 50);
+    const auto pooledRadius = [&](size_t i)
+    {
+        constexpr double quantile = 5.391949071934051; // independent Student t survival inverse, DF=3
+        return quantile * std::sqrt(noise.logMse * hyperbolicCovarianceFactor(g, 2, i, i));
+    };
+    const double pooledEnvelope = midpointIntegral([&](double u)
+    {
+        return std::exp(8 - pooledRadius(4) + .2 * u - pooledRadius(0) * std::abs(u)
+            - (1.5 + pooledRadius(5)) * std::cosh(u) + .25 * std::sinh(u) - pooledRadius(6) * std::abs(std::sinh(u)));
+    }, -1.4, 1.4);
+    const double pooledBound = std::exp(pooled.logLowerBound);
+    require(pooled.status == PeakValidationStatus::passed && pooledBound < pooledEnvelope && pooledBound / pooledEnvelope > .999,
+        "Pooled area evidence uses the selected trace and shared slope covariance");
+    fit.locals.pop_back();
+    fit.locals.front().skew = 1.199;
+    const auto uncertain = validatePeakAreaEvidence(fit, 0, geometry, noise, 1);
+    require(uncertain.status == PeakValidationStatus::failed && !uncertain.shapeCertified
+        && uncertain.logLowerBound < 0 && std::isinf(uncertain.logLowerBound),
+        "An uncertain tail cannot certify area even with a positive fitted shape");
+    require(validatePeakAreaEvidence(fit, 0, geometry, {1e-6, 2}, 1).status == PeakValidationStatus::unavailable,
+        "Area inference requires degrees of freedom from the same fit");
+}
+
 int main()
 {
     try
     {
         testWindowCoverage();
+        testAreaEvidence();
         RegCoeffs quadratic;
         quadratic.b0 = std::numeric_limits<double>::quiet_NaN();
         quadratic.b2 = -2;
