@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from test_mzml_cli import NS, binary_array, element, run_command, run_program, write_fixture
 
 
-def write_profiles(path):
+def write_profiles(path, boundary=False):
     write_fixture(path, blank=True)
     tree = ET.parse(path)
     spectra = tree.find(f".//{{{NS}}}spectrumList")
@@ -27,6 +27,13 @@ def write_profiles(path):
         # A distant flat profile cannot bridge the gap or supply missing coverage.
         mz += [101 + j * .02 for j in range(12)]
         raw += [4] * 12
+        if boundary:
+            lower = 111.92 if scan == 0 else 111.964
+            high_points = 21 if scan == 5 else 7
+            mz = [lower + j * .001 for j in range(round((112 - lower) / .001))]
+            mz += [112 + j * .004 for j in range(high_points)]
+            raw = [max(.001, (scan + 1) * 100 * math.exp(-.5 * ((mass - 111.99) / .005)**2))
+                   for mass in mz]
         spectrum.set("defaultArrayLength", str(len(mz)))
         spectrum.remove(spectrum.find(f"{{{NS}}}binaryDataArrayList"))
         arrays = element(spectrum, "binaryDataArrayList", count="2")
@@ -40,7 +47,7 @@ def main(host):
         root = Path(directory)
         source = root / "profile.mzML"
         write_profiles(source)
-        settings = ("--superspectrum", ".01", ".025", "11")
+        settings = ("--superspectrum-fixed", ".01", ".025", "11")
         output = root / "out"
         run_program(host, source, output, expect_success=True, option=None,
                     extra_arguments=settings)
@@ -61,10 +68,32 @@ def main(host):
                 assert abs(grid_center - round(grid_center)) < 1e-8
         previous = path.read_bytes()
         failed = run_command(host, ["-i", str(source), "-o", str(output),
-                                   "--superspectrum", "1e-20", ".025", "11"], root,
+                                   "--superspectrum-fixed", "1e-20", ".025", "11"], root,
                              expect_success=False)
         assert "step is too small" in failed.stderr
         assert path.read_bytes() == previous and list(output.iterdir()) == [path]
+        auto_output = root / "auto"
+        result = run_program(host, source, auto_output, expect_success=True, option=None,
+                             extra_arguments=("--superspectrum",))
+        assert "Superspectrum pooled settings:" in result.stdout
+        with (auto_output / path.name).open(newline="") as stream:
+            automatic = list(csv.DictReader(stream))
+        assert {(row["firstScan"], row["scan"]) for row in automatic} == {
+            (row["firstScan"], row["scan"]) for row in rows}
+        assert len(automatic) == len(rows)
+        assert all(abs(float(row["mz"]) - 100.125) < .004 for row in automatic)
+        steps = {float(row["gridStepMz"]) for row in automatic}
+        assert len(steps) == 1 and .007 < next(iter(steps)) < .012
+
+        boundary = root / "boundary.mzML"
+        write_profiles(boundary, boundary=True)
+        run_program(host, boundary, root / "boundary", expect_success=True, option=None,
+                    extra_arguments=("--superspectrum",))
+        with (root / "boundary" / "boundary_superspectrum_centroids.csv").open(newline="") as stream:
+            near_boundary = [row for row in csv.DictReader(stream) if abs(float(row["mz"]) - 111.99) < .004]
+        assert {row["firstScan"] for row in near_boundary} == {"0", "1"}
+        assert len({row["gridStepMz"] for row in near_boundary}) == 1
+        assert all(math.isclose(float(row["gridStepMz"]), .0005, rel_tol=1e-8) for row in near_boundary)
 
 
 if __name__ == "__main__":
