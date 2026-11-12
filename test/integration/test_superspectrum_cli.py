@@ -2,6 +2,7 @@
 
 import csv
 import math
+import statistics
 from pathlib import Path
 import sys
 import tempfile
@@ -67,11 +68,37 @@ def main(host):
                 grid_center = float(row["gridCenterMz"]) / .01
                 assert abs(grid_center - round(grid_center)) < 1e-8
         previous = path.read_bytes()
+        track_path = output / "profile_superspectrum_tracks.csv"
+        previous_tracks = track_path.read_bytes()
         failed = run_command(host, ["-i", str(source), "-o", str(output),
                                    "--superspectrum-fixed", "1e-20", ".025", "11"], root,
                              expect_success=False)
         assert "step is too small" in failed.stderr
-        assert path.read_bytes() == previous and list(output.iterdir()) == [path]
+        assert path.read_bytes() == previous and track_path.read_bytes() == previous_tracks
+        assert set(output.iterdir()) == {path, track_path}
+        path.unlink()
+        path.mkdir()
+        run_command(host, ["-i", str(source), "-o", str(output), *settings], root,
+                    expect_success=False)
+        assert path.is_dir() and track_path.read_bytes() == previous_tracks
+        assert set(output.iterdir()) == {path, track_path}
+        path.rmdir()
+        path.write_bytes(previous)
+        with track_path.open(newline="") as stream:
+            tracks = list(csv.DictReader(stream))
+        assert len({row["track"] for row in rows}) == 1
+        assert len(tracks) == 4
+        assert {row["track"] for row in tracks} == {rows[0]["track"]}
+        assert {int(row["scan"]): int(row["heightWindowFirstScan"]) for row in tracks} == {
+            0: 0, 1: 0, 2: 0, 5: 1}
+        window_masses = {row["firstScan"]: float(row["mz"]) for row in rows}
+        for row in tracks:
+            assert row["windows"] == "2"
+            assert math.isclose(float(row["mzMean"]), statistics.mean(window_masses.values()), abs_tol=1e-12)
+            assert math.isclose(float(row["mzStdDev"]), statistics.stdev(window_masses.values()), abs_tol=1e-12)
+            source_row = next(candidate for candidate in rows if candidate["scan"] == row["scan"]
+                              and candidate["firstScan"] == row["heightWindowFirstScan"])
+            assert float(row["height"]) == float(source_row["height"])
         auto_output = root / "auto"
         result = run_program(host, source, auto_output, expect_success=True, option=None,
                              extra_arguments=("--superspectrum",))
