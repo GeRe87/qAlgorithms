@@ -64,8 +64,9 @@ namespace qAlgorithms
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
         "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
-        "      --superspectrum GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
-        "                                   Fit joint centroids in rolling five-scan MS1 profile windows.\n"
+        "      --superspectrum              : Fit joint centroids with data-derived grid and window settings.\n"
+        "      --superspectrum-fixed GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
+        "                                   Run the same fit with explicit settings for comparison.\n"
         "      --peak-folding              : Experimental scan-wise folding of isolated MS1 profile peaks.\n"
         "                                    Outputs <input>_folding.csv, NOT a validated feature list.\n"
         "      --folding-axis <tof|orbitrap>: Required with --peak-folding. TOF uses sqrt(m/z);\n"
@@ -248,8 +249,14 @@ namespace qAlgorithms
             }
             else if (argument == "--superspectrum")
             {
+                if (args.superspectrum)
+                    throw std::invalid_argument("Select superspectrum mode only once");
+                args.superspectrum = true;
+            }
+            else if (argument == "--superspectrum-fixed")
+            {
                 if (argc - i <= 3 || args.superspectrum)
-                    throw std::invalid_argument("--superspectrum requires GRID_STEP MAX_GAP MAX_HALF_WIDTH");
+                    throw std::invalid_argument("--superspectrum-fixed requires GRID_STEP MAX_GAP MAX_HALF_WIDTH");
                 auto positive = [&](const char *field)
                 {
                     const std::string value = argv[++i];
@@ -264,7 +271,8 @@ namespace qAlgorithms
                 const double width = positive("maximum half-width");
                 if (width < 2 || width > maxscale_global || std::floor(width) != width)
                     throw std::invalid_argument("Superspectrum maximum half-width must be an integer in the compiled scale range");
-                args.superspectrum = SuperspectrumSettings{step, gap, static_cast<size_t>(width)};
+                args.superspectrum = true;
+                args.fixedSuperspectrum = SuperspectrumSettings{step, gap, static_cast<size_t>(width)};
             }
             else if (argument == "--calibrated-peaks")
             {

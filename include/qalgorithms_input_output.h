@@ -76,7 +76,8 @@ namespace qAlgorithms
         double foldingMinIntensity = 100.0; // minimum raw profile-apex intensity
         size_t foldingMaxScans = 0;          // 0: all eligible MS1 scans per polarity
         std::optional<CalibratedPeakSettings> calibratedPeaks;
-        std::optional<SuperspectrumSettings> superspectrum;
+        bool superspectrum = false;
+        std::optional<SuperspectrumSettings> fixedSuperspectrum;
         bool fifoFeatureMz = false;
 
         // progress reporting

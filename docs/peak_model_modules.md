@@ -158,18 +158,40 @@ all contributing scans, or when the chromatographic feature is unresolved.
 ## Centroiding on a five-scan superspectrum
 
 ```text
-qAlgorithms -i profile.mzML -o output --superspectrum GRID_STEP MAX_GAP MAX_HALF_WIDTH
+qAlgorithms -i profile.mzML -o output --superspectrum
 ```
 
-`GRID_STEP` and `MAX_GAP` are in m/z. The half-width is in grid samples,
-within the compiled qPeaks range starting at two. Each polarity is
-processed separately. The first five MS1 profile scans form the initial
-window, then each new scan advances it by one.
+Each polarity is processed separately. The first five MS1 profile scans
+form the initial window, then each new scan advances it by one.
 
-Adjacent positive profile points within `MAX_GAP` define covered runs.
+The automatic mode samples up to 24 evenly spaced scans across each
+polarity. Adjacent m/z spacings from the original scans estimate local
+sampling density. A spacing larger than twice its smallest adjacent
+spacing is excluded from this estimate. Four mantissa bands per octave
+give fixed m/z regions. In each region the grid step is half the median
+spacing. The gap limit is the larger of three times the median and 1.5
+times the 90th percentile. Regions with fewer than 24 spacing observations
+use pooled estimates. If the initial sample has no spacings, the scan list
+is checked for the first usable scan.
+
+The regression half-width is 1.5 times the 90th percentile of measured
+full widths at half maximum, rounded up in grid samples and clipped to
+the compiled range. Widths come from maxima whose falling flanks reach
+half height on both sides within a covered run. Fewer than 12 measured
+widths use the compiled upper bound. The run reports the estimated
+settings and includes the actual grid step in `gridStepMz`.
+
+To reproduce a fixed-settings comparison, use
+`--superspectrum-fixed GRID_STEP MAX_GAP MAX_HALF_WIDTH`.
+`GRID_STEP` and `MAX_GAP` are in m/z, and the half-width is in grid samples.
+
+Adjacent positive profile points within the gap limit at their midpoint
+define covered runs.
 Their union defines the superspectrum segments before interpolation.
 Common intervals supported by at least two runs from distinct scans
-are projected onto the fixed lattice `index * GRID_STEP`. Interpolation is
+are projected onto a fixed lattice `index * gridStep`. Fits near regional
+boundaries can use support from either side. The apex region determines
+which lattice owns the result. Interpolation is
 linear in intensity and confined to each scan's covered runs. Resampled
 runs stay cached until their scan leaves the FIFO. The fit uses the
 precomputed piecewise quadratic qPeaks inverse and its running sums along
@@ -180,7 +202,8 @@ scan, with the window bounds and centroid ID as the grouping key.
 Concave fits must have an interior apex, a fitted height at least twice
 both fitted edge heights, and explain more than half of the mean log
 trace's variation in the fit window. Overlapping candidates are ranked by
-explained variation times the contributing scan count. These heuristics
+explained variation times the contributing scan count and grid step.
+These heuristics
 operate on the shared shape. A centroid can recur in successive windows.
 The CSV is window-level output for evaluating the method before linking
 centroids across windows or estimating their scan-to-scan m/z variation.
