@@ -6,6 +6,7 @@
 #include "qalgorithms_peak_validation.h"
 
 #include <variant>
+#include <optional>
 
 namespace qAlgorithms
 {
@@ -83,6 +84,28 @@ namespace qAlgorithms
             size_t windowIndex = std::numeric_limits<size_t>::max(); // valid when selected
         };
 
+        struct AffineSampleAxis
+        {
+            double origin = 0; // measurement coordinate of sample index zero
+            double unitsPerSample = 1; // signed and nonzero
+            AxisUnit unit = AxisUnit::CallerDefined;
+        };
+
+        struct MeasuredHyperbolicPeak
+        {
+            HyperbolicApexSelection selection;
+            double position, height, area;
+            // Row-major order: position, height, area. Fixed-window
+            // covariance, conditional on the supplied axis.
+            std::array<double, 9> covariance;
+        };
+
+        struct MeasuredHyperbolicPeaks
+        {
+            AxisUnit axisUnit = AxisUnit::CallerDefined;
+            std::vector<MeasuredHyperbolicPeak> peaks;
+        };
+
         struct SegmentedHyperbolicSearchResult
         {
             HyperbolicSearchResult search;
@@ -104,7 +127,17 @@ namespace qAlgorithms
             // Singleton fits without an assignable observed maximum. For
             // overlapping windows the same information lives in apexGroups.
             std::vector<size_t> unassignedSingletons;
+            std::optional<MeasuredHyperbolicPeaks> measurementPeaks;
         };
+
+        // Map selected representatives on an externally calibrated affine
+        // sample axis. The scale must apply to the entire modeled peak;
+        // area has units intensity times measurement coordinate.
+        // Unresolved hypotheses stay in apexSelections. Each
+        // covariance belongs to one selected fit; no cross-peak covariance,
+        // calibration error, or selection uncertainty is inferred.
+        MeasuredHyperbolicPeaks mapSelectedHyperbolicPeaks(
+            const SegmentedHyperbolicSearchResult &result, const AffineSampleAxis &axis);
 
         // A data-independent, fixed family of windows, canonicalized by center
         // then scale. Configure before observing raw data; adaptive construction
@@ -225,6 +258,9 @@ namespace qAlgorithms
                 double threshold = 2.7182818284590452;
                 SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows;
                 bool selectRepresentatives = false;
+                // Requests representative selection and mapped output.
+                // Independent of coordinates used for segmentation.
+                const AffineSampleAxis *measurementAxis = nullptr;
             };
             const Segmentation *segmentation = nullptr; // optional, Hyperbolic only
         };

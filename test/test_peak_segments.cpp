@@ -180,12 +180,60 @@ int main()
             && dispatched.apexGroups.front().maxima.front().windowIndices == group.windowIndices,
             "Different scales at the same observed maximum remain one hypothesis");
         require(result.apexGroups.empty(), "Apex hypotheses require a single observed trace");
-        require(dispatched.apexSelections.empty(), "Representative selection is opt-in");
-        segmentation.selectRepresentatives = true;
+        require(dispatched.apexSelections.empty() && !dispatched.measurementPeaks, "Selection and measurement output are opt-in");
+        const AffineSampleAxis axis{200, -.025, AxisUnit::MassToCharge};
+        segmentation.measurementAxis = &axis;
         const auto selected = std::get<SegmentedHyperbolicSearchResult>(findPeaks(request));
         require(selected.apexSelections.size() == 1
             && selected.apexSelections.front().status == ApexSelectionStatus::selected,
             "The common entry point selects one representative of an isolated peak");
+        require(selected.measurementPeaks && selected.measurementPeaks->axisUnit == AxisUnit::MassToCharge
+            && selected.measurementPeaks->peaks.size() == 1, "Measurement output requests and maps the selected peak");
+        const auto &measured = selected.measurementPeaks->peaks.front();
+        const auto &source = selected.search.windows[measured.selection.windowIndex];
+        const auto &properties = source.inference.properties.front();
+        const double factor = axis.unitsPerSample / selected.search.fixedStep;
+        const double samplePosition = source.window.center + properties.apexU.value / selected.search.fixedStep;
+        require(measured.selection.first == 11 && std::abs(measured.position - (axis.origin + axis.unitsPerSample * samplePosition)) < 1e-12
+            && measured.height == properties.height.value && measured.area == std::abs(factor) * properties.areaU.value,
+            "Position uses the original sample origin and area uses the absolute axis scale");
+        const std::array<double, 3> factors{{factor, 1, std::abs(factor)}};
+        for (size_t row = 0; row < factors.size(); ++row)
+        {
+            for (size_t column = 0; column < factors.size(); ++column)
+            {
+                const size_t i = 3 * row + column;
+                require(measured.covariance[i] == source.inference.covariance[i] * factors[row] * factors[column],
+                    "Full covariance uses the signed affine Jacobian");
+            }
+        }
+        require(measured.covariance[2] * source.inference.covariance[2] < 0,
+            "A reversed measurement axis flips nonzero position-area covariance");
+        const AffineSampleAxis forward{5, .4, AxisUnit::RetentionTime};
+        const auto remapped = mapSelectedHyperbolicPeaks(selected, forward);
+        require(remapped.axisUnit == AxisUnit::RetentionTime && remapped.peaks.size() == 1
+            && std::abs(remapped.peaks.front().position - (5 + .4 * samplePosition)) < 1e-12,
+            "The same result can be mapped independently to another supplied calibration");
+        bool badAxisRejected = false;
+        try
+        {
+            (void)mapSelectedHyperbolicPeaks(selected, {5, 0, AxisUnit::RetentionTime});
+        }
+        catch (const std::invalid_argument &)
+        {
+            badAxisRejected = true;
+        }
+        require(badAxisRejected, "A zero calibration step is rejected");
+        bool covarianceUnderflowRejected = false;
+        try
+        {
+            (void)mapSelectedHyperbolicPeaks(selected, {5, 1e-200, AxisUnit::RetentionTime});
+        }
+        catch (const std::underflow_error &)
+        {
+            covarianceUnderflowRejected = true;
+        }
+        require(covarianceUnderflowRejected, "A tiny scale cannot silently turn covariance into zero");
 
         std::vector<float> doublePeak(33, 0);
         std::vector<double> doubleGrid(doublePeak.size());
@@ -277,6 +325,8 @@ int main()
         require(narrow.apexSelections.size() == 1 && narrow.apexSelections.front().first == 10
             && narrow.apexSelections.front().status == ApexSelectionStatus::insufficientCommonSupport,
             "Windows with a three-sample intersection remain unresolved");
+        require(mapSelectedHyperbolicPeaks(narrow, forward).peaks.empty(),
+            "Unresolved hypotheses stay visible without becoming measured peaks");
         for (size_t index : screened.diagnosticIndices)
         {
             const auto &actual = screened.search.windows[index].inference;

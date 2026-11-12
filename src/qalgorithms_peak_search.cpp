@@ -567,6 +567,58 @@ namespace qAlgorithms
             return plan.evaluate(intensities, length);
         }
 
+        MeasuredHyperbolicPeaks mapSelectedHyperbolicPeaks(
+            const SegmentedHyperbolicSearchResult &result, const AffineSampleAxis &axis)
+        {
+            const auto &search = result.search;
+            if (search.traceCount != 1 || !(search.fixedStep > 0 && std::isfinite(search.fixedStep))
+                || !std::isfinite(axis.origin) || !std::isfinite(axis.unitsPerSample) || axis.unitsPerSample == 0)
+            {
+                throw std::invalid_argument("Measurement output requires one trace and a finite affine sample axis");
+            }
+            const double unitsPerU = axis.unitsPerSample / search.fixedStep;
+            if (!std::isfinite(unitsPerU) || unitsPerU == 0)
+            {
+                throw std::overflow_error("Measurement step is outside numeric range");
+            }
+            MeasuredHyperbolicPeaks output;
+            output.axisUnit = axis.unit;
+            for (const auto &selection : result.apexSelections)
+            {
+                if (selection.status != ApexSelectionStatus::selected)
+                {
+                    continue;
+                }
+                const auto &entry = search.windows.at(selection.windowIndex);
+                if (entry.inference.properties.size() != 1 || entry.window.center >= search.length)
+                {
+                    throw std::invalid_argument("Selected fit does not match the single-trace search");
+                }
+                const double center = std::fma(static_cast<double>(entry.window.center), axis.unitsPerSample, axis.origin);
+                if (!std::isfinite(center))
+                {
+                    throw std::overflow_error("Measurement center is outside numeric range");
+                }
+                const auto mapped = mapHyperbolicAffine(entry.inference, {center, unitsPerU, axis.unit});
+                const auto &values = mapped.values.front();
+                MeasuredHyperbolicPeak peak{selection, values[0], values[1], values[2], {}};
+                if (peak.area == 0 && entry.inference.properties.front().areaU.value != 0)
+                {
+                    throw std::underflow_error("Measurement area underflowed");
+                }
+                for (size_t i = 0; i < peak.covariance.size(); ++i)
+                {
+                    peak.covariance[i] = mapped.covariance[i];
+                    if (peak.covariance[i] == 0 && entry.inference.covariance[i] != 0)
+                    {
+                        throw std::underflow_error("Measurement covariance underflowed");
+                    }
+                }
+                output.peaks.push_back(peak);
+            }
+            return output;
+        }
+
         ModelPeakSearchResult findPeaks(const PeakSearchRequest &request)
         {
             switch (request.model)
@@ -586,10 +638,15 @@ namespace qAlgorithms
                 if (request.segmentation != nullptr)
                 {
                     const auto &segmentation = *request.segmentation;
-                    return request.hyperbolicPlan->evaluateSegmented(
+                    auto result = request.hyperbolicPlan->evaluateSegmented(
                         {{request.intensity, segmentation.coordinates, request.length}},
                         segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold,
-                        segmentation.detail, segmentation.selectRepresentatives);
+                        segmentation.detail, segmentation.selectRepresentatives || segmentation.measurementAxis != nullptr);
+                    if (segmentation.measurementAxis != nullptr)
+                    {
+                        result.measurementPeaks = mapSelectedHyperbolicPeaks(result, *segmentation.measurementAxis);
+                    }
+                    return result;
                 }
                 return request.hyperbolicPlan->evaluate({request.intensity});
             }
