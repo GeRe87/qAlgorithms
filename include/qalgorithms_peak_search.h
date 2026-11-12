@@ -57,6 +57,9 @@ namespace qAlgorithms
         };
 
         enum class SegmentedWindowStatus { outsideEligibleSpan, evaluated };
+        // supportedWindows skips inference for shapes with no finite,
+        // adequately supported apex. Retained windows get full covariance.
+        enum class SegmentedInferenceDetail { allWindows, supportedWindows };
 
         struct ObservedApexHypothesis
         {
@@ -110,7 +113,8 @@ namespace qAlgorithms
             // selection yields exploratory inference over the complete family.
             SegmentedHyperbolicSearchResult evaluateSegmented(const std::vector<AlignedIntensityTrace> &traces,
                 double coordinateStep, double relativeTolerance = 0,
-                double threshold = 2.7182818284590452) const;
+                double threshold = 2.7182818284590452,
+                SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows) const;
 
         private:
             size_t length_;
@@ -152,6 +156,7 @@ namespace qAlgorithms
                 double coordinateStep = 0;
                 double relativeTolerance = 0;
                 double threshold = 2.7182818284590452;
+                SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows;
             };
             const Segmentation *segmentation = nullptr; // optional, Hyperbolic only
         };

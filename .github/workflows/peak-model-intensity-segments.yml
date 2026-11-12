@@ -107,6 +107,12 @@ jobs:
           do
             ./build-real/real_peak_audit real-data/injection${injection}.mzML evidence/audit${injection}.jsonl
             ./build-real/real_peak_segments real-data/injection${injection}.mzML evidence/scans${injection}.csv evidence/windows${injection}.csv evidence/spans${injection}.csv evidence/peaks${injection}.csv evidence/apices${injection}.csv
+            ./build-real/real_peak_segments real-data/injection${injection}.mzML screened-scans.csv screened-windows.csv screened-spans.csv screened-peaks.csv screened-apices.csv --supported-only
+            for kind in spans peaks apices
+            do
+              cmp "evidence/${kind}${injection}.csv" "screened-${kind}.csv"
+            done
+            cp screened-scans.csv "evidence/screened-scans${injection}.csv"
             python3 experiments/peak_model_segments/summarize.py evidence/scans${injection}.csv evidence/windows${injection}.csv evidence/audit${injection}.jsonl | tee evidence/summary${injection}.json
           done
       - uses: actions/upload-artifact@v4
