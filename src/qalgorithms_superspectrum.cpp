@@ -1,5 +1,6 @@
 #include "qalgorithms_superspectrum.h"
 #include "qalgorithms_superspectrum_tracks.h"
+#include "qalgorithms_input_output.h"
 #include "qalgorithms_qpeaks.h"
 #include "qalgorithms_read_file.h"
 
@@ -608,25 +609,93 @@ namespace qAlgorithms
             }
             writeWindow(csv, tracks, scans, selected);
         }
+
+        struct TrackChromatograms
+        {
+            std::vector<EIC> bins;
+            std::vector<size_t> trackIds;
+            std::vector<ChromatogramMass> masses;
+
+            void append(const std::vector<uint32_t> &indices, size_t id, double mz,
+                std::optional<double> spread, const std::map<uint32_t, SuperspectrumTrackHeight> &heights)
+            {
+                auto scan = indices.begin();
+                for (auto first = heights.begin(); first != heights.end();)
+                {
+                    scan = std::lower_bound(scan, indices.end(), first->first);
+                    if (scan == indices.end() || *scan != first->first)
+                        throw std::runtime_error("Superspectrum track references an unknown profile scan");
+                    auto end = std::next(first);
+                    auto nextScan = std::next(scan);
+                    while (end != heights.end() && nextScan != indices.end() && end->first == *nextScan)
+                    {
+                        ++end;
+                        ++nextScan;
+                    }
+                    const auto length = static_cast<size_t>(nextScan - scan);
+                    if (length >= MINLENGTH)
+                    {
+                        if (length > UINT16_MAX)
+                            throw std::runtime_error("Superspectrum chromatogram exceeds the qPeaks sample limit");
+                        if (!(mz >= std::numeric_limits<float>::denorm_min() && mz <= std::numeric_limits<float>::max()))
+                            throw std::runtime_error("Superspectrum track mass exceeds the qPeaks m/z range");
+                        EIC bin;
+                        bin.scanNumbers.clear();
+                        bin.RT.clear();
+                        bin.ints_area.clear();
+                        bin.DQSC.clear();
+                        bin.df.clear();
+                        bin.mz.clear();
+                        for (auto point = first; point != end; ++point)
+                        {
+                            const auto &measurement = point->second.measurement;
+                            if (measurement.height > std::numeric_limits<float>::max())
+                                throw std::runtime_error("Superspectrum height exceeds the qPeaks intensity range");
+                            bin.scanNumbers.push_back(point->first);
+                            bin.RT.push_back(measurement.retentionTime);
+                            // findFeatures uses ints_area as the chromatogram signal.
+                            bin.ints_area.push_back(static_cast<float>(measurement.height));
+                            bin.df.push_back(static_cast<uint16_t>(bin.df.size() + 1));
+                        }
+                        bins.push_back(std::move(bin));
+                        trackIds.push_back(id);
+                        masses.push_back({static_cast<float>(mz), spread ? static_cast<float>(*spread) :
+                            std::numeric_limits<float>::quiet_NaN()});
+                    }
+                    first = end;
+                    scan = nextScan;
+                }
+            }
+        };
     }
 
     void processSuperspectra(const XML_File &file, const std::vector<uint32_t> &indices,
-        const std::vector<float> &retentionTimes, const std::filesystem::path &output,
-        const std::filesystem::path &trackOutput,
+        const std::vector<float> &retentionTimes, const std::filesystem::path &outputDir,
+        const std::string &filename,
         const SuperspectrumSettings *fixed, bool noOverwrite, bool silent)
     {
+        const std::string stem = filename + "_superspectrum";
+        const std::array<std::string, 4> names{stem + "_centroids.csv", stem + "_tracks.csv",
+            stem + "_features.csv", stem + "_unresolved_groups.csv"};
+        auto countOutputs = [&]()
+        {
+            return std::count_if(names.begin(), names.end(), [&](const auto &name)
+            {
+                const auto path = outputDir / name;
+                if (!std::filesystem::exists(path))
+                    return false;
+                if (!std::filesystem::is_regular_file(path))
+                    throw std::runtime_error("Superspectrum output paths must be regular files");
+                return true;
+            });
+        };
         if (noOverwrite)
         {
-            const bool hasCentroids = std::filesystem::exists(output);
-            const bool hasTracks = std::filesystem::exists(trackOutput);
-            if (hasCentroids != hasTracks)
-                throw std::runtime_error("Superspectrum output is missing one CSV; rerun without --skip-existing");
-            if (hasCentroids)
-            {
-                if (!std::filesystem::is_regular_file(output) || !std::filesystem::is_regular_file(trackOutput))
-                    throw std::runtime_error("Superspectrum output paths must both be regular files");
+            const auto existing = countOutputs();
+            if (static_cast<size_t>(existing) == names.size())
                 return;
-            }
+            if (existing)
+                throw std::runtime_error("Superspectrum output is incomplete; rerun without --skip-existing");
         }
         if ((fixed && !(fixed->gridStep > 0 && std::isfinite(fixed->gridStep) && fixed->maxGap > 0 &&
               std::isfinite(fixed->maxGap) && fixed->maxHalfWidth >= 2 &&
@@ -634,24 +703,26 @@ namespace qAlgorithms
             throw std::invalid_argument("Invalid superspectrum settings or scan metadata");
         const auto grid = fixed ? GridSettings{*fixed, {}} : estimateGrid(file, indices, silent);
 
-        auto staging = output;
+        auto staging = outputDir / names.front();
         staging += ".partial";
-        const auto partial = staging / "centroids.csv";
-        const auto partialTracks = staging / "tracks.csv";
-        const auto backup = staging / "previous-tracks.csv";
         if (!std::filesystem::create_directory(staging))
             throw std::runtime_error("Superspectrum partial output already exists");
-        bool publishedTracks = false;
+        std::array<bool, names.size()> published{}, backedUp{};
         try
         {
-            std::ofstream csv(partial);
-            std::ofstream trackCsv(partialTracks);
+            std::ofstream csv(staging / names[0]);
+            std::ofstream trackCsv(staging / names[1]);
             if (!csv || !trackCsv)
                 throw std::runtime_error("Could not open superspectrum output");
             csv << "firstScan,lastScan,centroid,scan,retentionTimeSeconds,mz,height,gridCenterMz,halfWidth,b1,b2,b3,logRise,gridStepMz,track\n";
             csv << std::setprecision(std::numeric_limits<double>::max_digits10);
             trackCsv << std::setprecision(std::numeric_limits<double>::max_digits10);
-            SuperspectrumTracks tracks(trackCsv, scansPerWindow);
+            TrackChromatograms chromatograms;
+            SuperspectrumTracks tracks(trackCsv, scansPerWindow,
+                [&](size_t id, double mz, std::optional<double> spread, const auto &heights)
+                {
+                    chromatograms.append(indices, id, mz, spread, heights);
+                });
             std::deque<ProfileScan> scans;
             for (size_t i = 0; grid.fallback.gridStep > 0 && i < indices.size(); ++i)
             {
@@ -669,32 +740,45 @@ namespace qAlgorithms
             trackCsv.close();
             if (!csv || !trackCsv)
                 throw std::runtime_error("Could not complete superspectrum output");
-            if (noOverwrite && (std::filesystem::exists(output) || std::filesystem::exists(trackOutput)))
+            std::vector<FeaturePeak> features;
+            findFeatures(&chromatograms.bins, &retentionTimes, &features, &chromatograms.masses);
+            if (!printFeatureList(&features, staging, stem, &chromatograms.bins, true, false, nullptr,
+                    &chromatograms.trackIds))
+                throw std::runtime_error("Could not write superspectrum feature output");
+            if (countOutputs() && noOverwrite)
                 throw std::runtime_error("Superspectrum output appeared while processing");
-            if (std::filesystem::exists(trackOutput))
+            for (size_t i = 0; i < names.size(); ++i)
             {
-                if (!std::filesystem::is_regular_file(trackOutput))
-                    throw std::runtime_error("Superspectrum track output is not a regular file");
-                std::filesystem::rename(trackOutput, backup);
+                const auto target = outputDir / names[i];
+                if (std::filesystem::exists(target))
+                {
+                    std::filesystem::rename(target, staging / ("previous-" + names[i]));
+                    backedUp[i] = true;
+                }
+                std::filesystem::rename(staging / names[i], target);
+                published[i] = true;
             }
-            std::filesystem::rename(partialTracks, trackOutput);
-            publishedTracks = true;
-            std::filesystem::rename(partial, output);
+            if (!silent)
+                printf("    Superspectrum feature detection: %zu chromatograms, %zu features\n",
+                    chromatograms.bins.size(), features.size());
         }
         catch (...)
         {
             std::error_code error;
-            if (publishedTracks)
-                std::filesystem::remove(trackOutput, error);
-            if (std::filesystem::exists(backup, error))
-                std::filesystem::rename(backup, trackOutput, error);
-            std::filesystem::remove(partial, error);
-            std::filesystem::remove(partialTracks, error);
+            for (size_t i = 0; i < names.size(); ++i)
+            {
+                if (published[i])
+                    std::filesystem::remove(outputDir / names[i], error);
+                if (backedUp[i])
+                    std::filesystem::rename(staging / ("previous-" + names[i]), outputDir / names[i], error);
+                std::filesystem::remove(staging / names[i], error);
+            }
             std::filesystem::remove(staging, error);
             throw;
         }
         std::error_code error;
-        std::filesystem::remove(backup, error);
+        for (const auto &name : names)
+            std::filesystem::remove(staging / ("previous-" + name), error);
         std::filesystem::remove(staging, error);
     }
 }

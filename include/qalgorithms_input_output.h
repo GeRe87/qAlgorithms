@@ -168,7 +168,8 @@ namespace qAlgorithms
                           std::string filename,
                           const std::vector<EIC> *originalBins,
                           bool silent, bool noOverwrite,
-                          const std::vector<std::optional<SharedMassFit>> *massFits = nullptr);
+                          const std::vector<std::optional<SharedMassFit>> *massFits = nullptr,
+                          const std::vector<size_t> *trackIds = nullptr);
 
     void printFeatureCentroids(const std::vector<FeaturePeak> *peaktable,
                                std::filesystem::path pathOutput,

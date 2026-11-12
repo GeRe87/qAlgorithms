@@ -8,22 +8,28 @@
 
 namespace qAlgorithms
 {
-    SuperspectrumTracks::SuperspectrumTracks(std::ostream &output, size_t windowScans)
-        : output(output), windowScans(windowScans)
+    SuperspectrumTracks::SuperspectrumTracks(std::ostream &output, size_t windowScans,
+        SuperspectrumTrackVisitor visit)
+        : output(output), windowScans(windowScans), visit(std::move(visit))
     {
         output << "track,windows,mzMean,mzStdDev,scan,retentionTimeSeconds,height,heightWindowFirstScan\n";
     }
 
     void SuperspectrumTracks::write(const Track &track)
     {
+        std::optional<double> spread;
+        if (track.windows > 1)
+            spread = std::sqrt(std::max(0.0, track.squares) / (track.windows - 1));
         for (const auto &[scan, height] : track.heights)
         {
             output << track.id << ',' << track.windows << ',' << track.mean << ',';
-            if (track.windows > 1)
-                output << std::sqrt(std::max(0.0, track.squares) / (track.windows - 1));
+            if (spread)
+                output << *spread;
             output << ',' << scan << ',' << height.measurement.retentionTime << ','
                    << height.measurement.height << ',' << height.firstScan << '\n';
         }
+        if (visit)
+            visit(track.id, track.mean, spread, track.heights);
     }
 
     std::vector<size_t> SuperspectrumTracks::append(
@@ -98,7 +104,7 @@ namespace qAlgorithms
             track.last = observation;
             for (const auto &height : observation.heights)
             {
-                const auto inserted = track.heights.try_emplace(height.scan, ScanHeight{height, firstScan});
+                const auto inserted = track.heights.try_emplace(height.scan, SuperspectrumTrackHeight{height, firstScan});
                 if (!inserted.second && height.distanceToWindowCenter <
                     inserted.first->second.measurement.distanceToWindowCenter)
                     inserted.first->second = {height, firstScan};

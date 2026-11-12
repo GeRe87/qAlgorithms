@@ -8,7 +8,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-from test_mzml_cli import NS, binary_array, element, run_command, run_program, write_fixture
+from test_mzml_cli import EXPECTED, NS, binary_array, element, run_command, run_program, write_fixture
 
 
 def write_profiles(path, boundary=False):
@@ -43,6 +43,34 @@ def write_profiles(path, boundary=False):
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+def check_chromatographic_areas(host, root):
+    source = root / "gaussian.mzML"
+    write_fixture(source, rt_minutes=True)
+    output = root / "gaussian"
+    run_program(host, source, output, expect_success=True, option=None,
+                extra_arguments=("--superspectrum",))
+    with (output / "gaussian_superspectrum_features.csv").open(newline="") as stream:
+        features = list(csv.DictReader(stream))
+    with (output / "gaussian_superspectrum_tracks.csv").open(newline="") as stream:
+        heights = list(csv.DictReader(stream))
+    assert len(features) == 2 and len({feature["track"] for feature in features}) == 2
+    for i, (feature, (mass, rt)) in enumerate(zip(features, EXPECTED["positive"])):
+        assert feature["isUnresolved"] == "0"
+        assert abs(float(feature["mz"]) - mass) < .001
+        assert abs(float(feature["retentionTime"]) - rt) < .05
+        expected_area = (150000 - 30000 * i) * (2 + .2 * i) * math.sqrt(2 * math.pi)
+        assert math.isclose(float(feature["area"]), expected_area, rel_tol=.03)
+        lower = float(feature["lowestRetentionTime"])
+        upper = float(feature["highestRetentionTime"])
+        measured = [(float(row["retentionTimeSeconds"]), float(row["height"])) for row in heights
+                    if row["track"] == feature["track"] and
+                    lower - 5e-5 <= float(row["retentionTimeSeconds"]) <= upper + 5e-5]
+        assert len(measured) >= 5 and abs(measured[0][0] - lower) < 5e-5
+        assert abs(measured[-1][0] - upper) < 5e-5
+        observed = sum((b[0] - a[0]) * (a[1] + b[1]) / 2 for a, b in zip(measured, measured[1:]))
+        assert math.isclose(float(feature["areaObserved"]), observed, rel_tol=1e-7)
+
+
 def main(host):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -70,18 +98,20 @@ def main(host):
         previous = path.read_bytes()
         track_path = output / "profile_superspectrum_tracks.csv"
         previous_tracks = track_path.read_bytes()
+        files = {path, track_path, output / "profile_superspectrum_features.csv",
+                 output / "profile_superspectrum_unresolved_groups.csv"}
         failed = run_command(host, ["-i", str(source), "-o", str(output),
                                    "--superspectrum-fixed", "1e-20", ".025", "11"], root,
                              expect_success=False)
         assert "step is too small" in failed.stderr
         assert path.read_bytes() == previous and track_path.read_bytes() == previous_tracks
-        assert set(output.iterdir()) == {path, track_path}
+        assert set(output.iterdir()) == files
         path.unlink()
         path.mkdir()
         run_command(host, ["-i", str(source), "-o", str(output), *settings], root,
                     expect_success=False)
         assert path.is_dir() and track_path.read_bytes() == previous_tracks
-        assert set(output.iterdir()) == {path, track_path}
+        assert set(output.iterdir()) == files
         path.rmdir()
         path.write_bytes(previous)
         with track_path.open(newline="") as stream:
@@ -121,6 +151,7 @@ def main(host):
         assert {row["firstScan"] for row in near_boundary} == {"0", "1"}
         assert len({row["gridStepMz"] for row in near_boundary}) == 1
         assert all(math.isclose(float(row["gridStepMz"]), .0005, rel_tol=1e-8) for row in near_boundary)
+        check_chromatographic_areas(host, root)
 
 
 if __name__ == "__main__":

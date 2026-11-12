@@ -64,7 +64,7 @@ namespace qAlgorithms
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
         "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
-        "      --superspectrum              : Fit joint centroids with data-derived grid and window settings.\n"
+        "      --superspectrum              : Detect LC features from joint MS1 centroids and their tracks.\n"
         "      --superspectrum-fixed GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
         "                                   Run the same fit with explicit settings for comparison.\n"
         "      --peak-folding              : Experimental scan-wise folding of isolated MS1 profile peaks.\n"
@@ -609,7 +609,7 @@ namespace qAlgorithms
             || args.printFeatures || args.printProfileSection || args.printSubProfile
             || args.printFeatCens || args.printComponentRegs || args.printComponentBins))
         {
-            (void)fprintf(stderr, "Error: --superspectrum requires -o and its own centroid output.\n");
+            (void)fprintf(stderr, "Error: --superspectrum requires -o and writes its own feature and centroid outputs.\n");
             goodInputs = false;
         }
 
@@ -933,9 +933,12 @@ namespace qAlgorithms
                           std::string filename,
                           const std::vector<EIC> *originalBins,
                           bool silent, bool noOverwrite,
-                          const std::vector<std::optional<SharedMassFit>> *massFits)
+                          const std::vector<std::optional<SharedMassFit>> *massFits,
+                          const std::vector<size_t> *trackIds)
     {
         if (massFits && massFits->size() != peaktable->size())
+            return false;
+        if (trackIds && trackIds->size() != originalBins->size())
             return false;
         const std::filesystem::path unresolvedPath = pathOutput / (filename + "_unresolved_groups.csv");
         filename += "_features.csv";
@@ -977,6 +980,8 @@ namespace qAlgorithms
         output << header;
         if (massFits)
             output << ",mzJoint,mzJointStdError,mzJointScans,mzJointPoints";
+        if (trackIds)
+            output << ",track,areaObserved";
         output << '\n';
         std::stringstream unresolvedOutput;
         unresolvedOutput << "featureID,binID,maximumNumber,retentionTime,reason\n" << std::setprecision(9);
@@ -1011,6 +1016,20 @@ namespace qAlgorithms
                 }
                 else
                     output << ",,,,";
+            }
+            if (trackIds)
+            {
+                const auto &bin = originalBins->at(binID);
+                const size_t first = peak.idxPeakStart;
+                const size_t end = first + peak.length;
+                double observedArea = 0;
+                for (size_t j = first + 1; j < end; ++j)
+                {
+                    const double width = static_cast<double>(bin.RT.at(j)) - bin.RT.at(j - 1);
+                    observedArea += width * (static_cast<double>(bin.ints_area.at(j)) + bin.ints_area.at(j - 1)) / 2;
+                }
+                output << ',' << trackIds->at(binID) << ',' << std::setprecision(std::numeric_limits<double>::max_digits10)
+                       << observedArea;
             }
             output << '\n';
             for (size_t j = 0; j < peak.unresolvedMaximaRT.size(); ++j)

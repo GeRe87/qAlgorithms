@@ -211,9 +211,7 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
 
         if (args.superspectrum)
         {
-            const auto output = std::filesystem::path(args.outputPath) / (filename + "_superspectrum_centroids.csv");
-            const auto tracks = std::filesystem::path(args.outputPath) / (filename + "_superspectrum_tracks.csv");
-            processSuperspectra(inputFile, selectedIndices, retentionTimes, output, tracks,
+            processSuperspectra(inputFile, selectedIndices, retentionTimes, args.outputPath, filename,
                 args.fixedSuperspectrum ? &*args.fixedSuperspectrum : nullptr, args.noOverwrite, args.silent);
             ++processedPolarities;
             continue;
