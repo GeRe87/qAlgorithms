@@ -2,6 +2,7 @@
 #define QALGORITHMS_DATATYPES_H
 
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 
 // This file includes the structs used for data management in qAlgorithms.
@@ -99,6 +100,14 @@ namespace qAlgorithms
         // std::vector<float> interpolatedDQSB;
         uint32_t componentID = 0; // this is only set during componentisation
         // bool interpolations;          // are there interpolated values?
+    };
+
+    struct SharedMassFit
+    {
+        double mz;
+        double standardError;
+        size_t scans;
+        size_t points;
     };
 
     struct FeaturePeak

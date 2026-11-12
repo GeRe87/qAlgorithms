@@ -63,6 +63,7 @@ namespace qAlgorithms
         "                                   all binned centroids will be printed to the output location\n"
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
+        "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
         "      --peak-folding              : Experimental scan-wise folding of isolated MS1 profile peaks.\n"
         "                                    Outputs <input>_folding.csv, NOT a validated feature list.\n"
         "      --folding-axis <tof|orbitrap>: Required with --peak-folding. TOF uses sqrt(m/z);\n"
@@ -234,6 +235,10 @@ namespace qAlgorithms
             else if ((argument == "-pf") || (argument == "--printfeatures") || (argument == "-printfeatures"))
             {
                 args.printFeatures = true;
+            }
+            else if (argument == "--fifo-feature-mz")
+            {
+                args.fifoFeatureMz = true;
             }
             else if (argument == "--peak-folding")
             {
@@ -562,6 +567,13 @@ namespace qAlgorithms
             (void)fprintf(stderr, "Error: --calibrated-peaks requires -o and its own scan-level output.\n");
             goodInputs = false;
         }
+        if (args.fifoFeatureMz && (!args.printFeatures || args.outputPath.empty() ||
+            args.peakFolding || args.calibratedPeaks || args.printCentroidsMZML ||
+            args.printComponentRegs || args.printComponentBins))
+        {
+            (void)fprintf(stderr, "Error: --fifo-feature-mz requires standard feature CSV output (-o, optionally --printfeatures).\n");
+            goodInputs = false;
+        }
 
         if (args.silent && args.verboseProgress)
         {
@@ -881,8 +893,11 @@ namespace qAlgorithms
                           std::filesystem::path pathOutput,
                           std::string filename,
                           const std::vector<EIC> *originalBins,
-                          bool silent, bool noOverwrite)
+                          bool silent, bool noOverwrite,
+                          const std::vector<std::optional<SharedMassFit>> *massFits)
     {
+        if (massFits && massFits->size() != peaktable->size())
+            return false;
         const std::filesystem::path unresolvedPath = pathOutput / (filename + "_unresolved_groups.csv");
         filename += "_features.csv";
         pathOutput /= filename;
@@ -919,8 +934,11 @@ namespace qAlgorithms
 
         constexpr std::string_view header = "ID,binID,mz,mzUncertainty,retentionTime,RT_Uncertainty,"
                                             "lowestRetentionTime,highestRetentionTime,area,areaUncertainty,height,heightUncertainty,"
-                                            "scale,DQSC,DQSB,DQSF,b0,b1,b2,b3,isUnresolved,unresolvedReason,unresolvedMaximaCount,unresolvedLowerRT,unresolvedUpperRT\n";
+                                            "scale,DQSC,DQSB,DQSF,b0,b1,b2,b3,isUnresolved,unresolvedReason,unresolvedMaximaCount,unresolvedLowerRT,unresolvedUpperRT";
         output << header;
+        if (massFits)
+            output << ",mzJoint,mzJointStdError,mzJointScans,mzJointPoints";
+        output << '\n';
         std::stringstream unresolvedOutput;
         unresolvedOutput << "featureID,binID,maximumNumber,retentionTime,reason\n" << std::setprecision(9);
 
@@ -932,7 +950,7 @@ namespace qAlgorithms
             assert(binID < originalBins->size());
 
             char buffer[1024];
-            int printLen = snprintf(buffer, sizeof(buffer), "%u,%zu,%0.6f,%0.6f,%0.4f,%0.4f,%0.4f,%0.4f,%0.3f,%0.3f,%0.3f,%0.3f,%u,%0.5f,%0.5f,%0.5f,%0.8f,%0.8f,%0.8f,%0.8f,%u,%u,%zu,%0.4f,%0.4f\n",
+            int printLen = snprintf(buffer, sizeof(buffer), "%u,%zu,%0.6f,%0.6f,%0.4f,%0.4f,%0.4f,%0.4f,%0.3f,%0.3f,%0.3f,%0.3f,%u,%0.5f,%0.5f,%0.5f,%0.8f,%0.8f,%0.8f,%0.8f,%u,%u,%zu,%0.4f,%0.4f",
                                        ID, binID, peak.mz, peak.mzUncertainty,
                                        peak.retentionTime, peak.RT_Uncertainty, peak.lowerRT, peak.upperRT,
                                        peak.area, peak.areaUncertainty, peak.height, peak.heightUncertainty, peak.coefficients.scale,
@@ -944,6 +962,18 @@ namespace qAlgorithms
             if (printLen < 0 || (size_t)printLen >= sizeof(buffer))
                 return false;
             output << buffer;
+            if (massFits)
+            {
+                if (const auto &measurement = massFits->at(i))
+                {
+                    const auto &fit = *measurement;
+                    output << ',' << std::setprecision(std::numeric_limits<double>::max_digits10) << fit.mz
+                           << ',' << fit.standardError << ',' << fit.scans << ',' << fit.points;
+                }
+                else
+                    output << ",,,,";
+            }
+            output << '\n';
             for (size_t j = 0; j < peak.unresolvedMaximaRT.size(); ++j)
                 unresolvedOutput << ID << ',' << binID << ',' << j+1 << ',' << peak.unresolvedMaximaRT[j] << ',' << unsigned(peak.unresolvedReason) << '\n';
             ++ID;

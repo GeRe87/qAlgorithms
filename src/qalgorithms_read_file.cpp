@@ -231,9 +231,10 @@ namespace qAlgorithms
         defective = true;
     };
 
+    template <typename T>
     static int32_t decodeSpectrum(const char *const binaryData,
                                   const size_t encodedLength,
-                                  std::vector<float> *spectrum,
+                                  std::vector<T> *spectrum,
                                   const size_t finalSize,
                                   bool compression, bool f64)
     {
@@ -276,20 +277,19 @@ namespace qAlgorithms
                 std::memcpy(&value_float, decoded_string.data() + index * element_size, sizeof(float));
                 value = value_float;
             }
-            if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+            if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<T>::max())
             {
                 spectrum->clear();
                 return 4;
             }
-            spectrum->at(index) = static_cast<float>(value);
+            spectrum->at(index) = static_cast<T>(value);
         }
         return 0;
     }
 
-    int32_t get_spectrum(const XML_File *file, // this only extracts data that is in profile mode.
-                         std::vector<float> *const spectrum_mz,
-                         std::vector<float> *const spectrum_int,
-                         size_t index)
+    template <typename T>
+    static int32_t readSpectrum(const XML_File *file, std::vector<T> *spectrum_mz,
+        std::vector<T> *spectrum_int, size_t index)
     {
         spectrum_mz->clear();
         spectrum_int->clear();
@@ -321,7 +321,7 @@ namespace qAlgorithms
         }
 
         const pugi::xml_node arrays[] = {mz_array, intensity_array};
-        std::vector<float> *outputs[] = {spectrum_mz, spectrum_int};
+        std::vector<T> *outputs[] = {spectrum_mz, spectrum_int};
         for (size_t array_index = 0; array_index < 2; ++array_index)
         {
             const pugi::xml_node array = arrays[array_index];
@@ -350,7 +350,19 @@ namespace qAlgorithms
             }
         }
         return 0;
-    };
+    }
+
+    int32_t get_spectrum(const XML_File *file, std::vector<float> *spectrum_mz,
+        std::vector<float> *spectrum_int, size_t index)
+    {
+        return readSpectrum(file, spectrum_mz, spectrum_int, index);
+    }
+
+    int32_t get_spectrum(const XML_File *file, std::vector<double> *spectrum_mz,
+        std::vector<double> *spectrum_int, size_t index)
+    {
+        return readSpectrum(file, spectrum_mz, spectrum_int, index);
+    }
 
     void get_spectra_RT(const XML_File *file, const std::vector<uint32_t> *indices, std::vector<float> *const RTs)
     {

@@ -127,3 +127,30 @@ is reported as `unsupportedAxis`. The grid check allows float storage
 rounding of one ULP relative to the affine line through the scan endpoints.
 The reported covariance is conditional on that calibration and the chosen
 fit. The rotation budget must resolve the largest tested scan family.
+
+## Joint m/z for chromatographic features
+
+Use `qAlgorithms -i profile.mzML -o output --fifo-feature-mz` to add
+`mzJoint`, `mzJointStdError`, `mzJointScans` and `mzJointPoints` to the
+regular feature CSV. The ordinary qPeaks workflow first detects centroids,
+builds EICs and identifies resolved features. The joint fit then rereads
+only the spectra needed by those features. The existing feature columns
+retain their original definitions, including the area along retention time.
+Use a fresh output directory when adding this option with `--skip-existing`.
+
+Each feature uses a fixed common m/z interval, the intersection of the
+centroid m/z ± one FWHM intervals in its measured scans. The fit uses each
+scan's recorded profile points at their original precision, including
+nonuniform and scan-specific m/z grids. Scans with fewer than three usable
+points, repeated coordinates in the segment or nonpositive intensity in
+the segment are omitted. Interpolated EIC entries do not contribute.
+
+The five-scan FIFO adds and subtracts centered regression cross-products.
+The closing fit combines the expired and current contributions, using each
+scan once. The local model uses a shared log-quadratic shape with a separate
+log amplitude per scan. The reported m/z is its common apex. The standard
+error is conditional on independent, equal-variance log residuals, the
+selected scans and the fixed segment. It does not include m/z calibration,
+drift or feature selection uncertainty. The joint columns are empty when
+there is insufficient support for a concave fit with an apex covered by
+all contributing scans, or when the chromatographic feature is unresolved.

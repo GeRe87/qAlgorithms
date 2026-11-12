@@ -102,6 +102,9 @@ namespace qAlgorithms
                          std::vector<float> *const spectrum_mz,
                          std::vector<float> *const spectrum_int,
                          size_t index);
+    // Preserve 64-bit input coordinates and intensities for profile refitting.
+    int32_t get_spectrum(const XML_File *file, std::vector<double> *spectrum_mz,
+        std::vector<double> *spectrum_int, size_t index);
 
     bool spectrum_is_compressed(const XML_File *file, const size_t specNum);
 
