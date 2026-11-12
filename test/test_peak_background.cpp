@@ -1,4 +1,5 @@
 #include "qalgorithms_peak_validation.h"
+#include "detail/qalgorithms_peak_background.h"
 
 #include <array>
 #include <cmath>
@@ -93,6 +94,44 @@ static void testBackground(PeakModelKind model, double step)
     }
 }
 
+static void testBackgroundReplay()
+{
+    const std::vector<double> grid{-3, -2, -1, 0, 1, 2, 3};
+    const std::vector<double> shape{0, .1, .4, 1, .4, .1, 0};
+    std::vector<double> observed(grid.size());
+    for (size_t i = 0; i < grid.size(); ++i)
+    {
+        observed[i] = 20 + grid[i] + 30 * shape[i];
+    }
+    PeakBackgroundOptions options;
+    options.rotations = 99;
+    size_t replayed = 0;
+    const auto result = runPeakBackground(observed, grid, shape, true,
+        [&](const auto &draw, auto &replayedShape)
+        {
+            require(draw.size() == grid.size(), "Replay receives one complete raw window");
+            ++replayed;
+            replayedShape = shape;
+            return true;
+        }, options);
+    require(replayed == 2 * options.rotations && result.linear.explainedFraction > .999999,
+        "The raw comparison accepts a model-independent template procedure");
+    bool wrongLengthRejected = false;
+    try
+    {
+        (void)runPeakBackground(observed, grid, shape, true, [](const auto &, auto &replayedShape)
+        {
+            replayedShape.clear();
+            return true;
+        }, options);
+    }
+    catch (const std::invalid_argument &)
+    {
+        wrongLengthRejected = true;
+    }
+    require(wrongLengthRejected, "A successful replay must return one value per raw sample");
+}
+
 static void testCompleteCascade(PeakModelKind model, double step)
 {
     constexpr size_t length = 17;
@@ -112,6 +151,7 @@ static void testCompleteCascade(PeakModelKind model, double step)
     bool missingThresholdRejected = false;
     try
     {
+        testBackgroundReplay();
         FullPeakCandidateOptions missing;
         missing.minimumArea = 100;
         (void)validatePeakCandidate(model, raw.data(), raw.size(), step, missing);

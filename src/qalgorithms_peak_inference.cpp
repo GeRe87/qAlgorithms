@@ -8,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 
+// Hyperbolic fixed-window inference and propagation of fit uncertainty.
 namespace qAlgorithms
 {
     namespace peak_model

@@ -2,6 +2,8 @@
 #include <cmath>
 #include <stdexcept>
 
+// Built-in fit dispatch and the bridge from hyperbolic coefficients to
+// fixed-window fit properties.
 namespace qAlgorithms {
 namespace {
 void validateLogs(const std::vector<const float*> &logs, size_t n) {

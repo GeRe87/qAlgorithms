@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <utility>
 
+// Search plans enumerate windows, apply candidate decisions and select
+// representatives. The existing model-specific search paths enter here.
 namespace qAlgorithms
 {
     namespace peak_model

@@ -2,15 +2,13 @@
 #define QALGORITHMS_PEAK_VALIDATION_H
 
 #include "qalgorithms_peak_fit.h"
+#include "qalgorithms_peak_test_types.h"
 #include <optional>
-#include <cstdint>
 
 namespace qAlgorithms
 {
     namespace peak_model
     {
-        enum class PeakValidationStatus { notEvaluated, failed, passed, unavailable };
-
         struct PeakGeometryValidation
         {
             PeakValidationStatus form = PeakValidationStatus::notEvaluated;
@@ -111,28 +109,6 @@ namespace qAlgorithms
             const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise,
             size_t minimumSamplesPerSide = 2, std::optional<double> minimumCoverage = std::nullopt,
             std::optional<double> minimumArea = std::nullopt);
-
-        struct PeakBackgroundOptions
-        {
-            double alpha = .05;
-            size_t rotations = 999;
-            uint64_t seed = 0;
-            size_t minimumSamplesPerSide = 2;
-        };
-
-        struct PeakBackgroundComparison
-        {
-            double backgroundRSS = std::numeric_limits<double>::quiet_NaN();
-            double explainedFraction = std::numeric_limits<double>::quiet_NaN();
-            double pValue = std::numeric_limits<double>::quiet_NaN();
-        };
-
-        struct PeakBackgroundValidation
-        {
-            PeakValidationStatus status = PeakValidationStatus::unavailable;
-            bool supportedPeakShape = false;
-            PeakBackgroundComparison constant, linear;
-        };
 
         // One prespecified model and equally spaced, odd-length window. The fitted
         // alternative adds a nonnegative peak amplitude to each unconstrained
