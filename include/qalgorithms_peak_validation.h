@@ -3,6 +3,7 @@
 
 #include "qalgorithms_peak_fit.h"
 #include <optional>
+#include <cstdint>
 
 namespace qAlgorithms
 {
@@ -83,6 +84,41 @@ namespace qAlgorithms
             const PeakFormNoise &noise, double minimumFraction);
         PeakWindowCoverage validatePeakWindowCoverage(const HyperbolicModel::Fit &fit, size_t trace,
             const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise, double minimumFraction);
+
+        struct PeakBackgroundOptions
+        {
+            double alpha = .05;
+            size_t rotations = 999;
+            uint64_t seed = 0;
+            size_t minimumSamplesPerSide = 2;
+        };
+
+        struct PeakBackgroundComparison
+        {
+            double backgroundRSS = std::numeric_limits<double>::quiet_NaN();
+            double explainedFraction = std::numeric_limits<double>::quiet_NaN();
+            double pValue = std::numeric_limits<double>::quiet_NaN();
+        };
+
+        struct PeakBackgroundValidation
+        {
+            PeakValidationStatus status = PeakValidationStatus::unavailable;
+            bool supportedPeakShape = false;
+            PeakBackgroundComparison constant, linear;
+        };
+
+        // One prespecified model and equally spaced, odd-length window. The fitted
+        // alternative adds a nonnegative peak amplitude to each unconstrained
+        // background. Smallest reported p is 1/(rotations+1).
+        // Rotation calibration assumes independent, homoskedastic Gaussian
+        // errors on uncensored raw intensities. A window with any nonpositive
+        // observation supplies no peak template; simulations obey the same rule.
+        // fixedStep is 1 for quadratic and the model step in u for hyperbolic.
+        // Pass requires rejecting both backgrounds. Adaptive model/window
+        // selection, clipping, heteroskedasticity and serial correlation are
+        // outside this calibration. Choose the simulation seed before testing.
+        PeakBackgroundValidation validatePeakBackground(PeakModelKind model, const float *intensities,
+            size_t length, double fixedStep, const PeakBackgroundOptions &options = {});
     }
 }
 
