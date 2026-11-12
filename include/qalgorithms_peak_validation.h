@@ -146,6 +146,33 @@ namespace qAlgorithms
         // outside this calibration. Choose the simulation seed before testing.
         PeakBackgroundValidation validatePeakBackground(PeakModelKind model, const float *intensities,
             size_t length, double fixedStep, const PeakBackgroundOptions &options = {});
+
+        struct FullPeakCandidateOptions
+        {
+            double minimumArea = 0;
+            double minimumCoverage = 0;
+            double logAlpha = .05;
+            PeakBackgroundOptions background;
+        };
+
+        struct FullPeakCandidateValidation
+        {
+            PeakValidationStatus status = PeakValidationStatus::unavailable;
+            PeakCandidateValidation stages;
+            PeakFormNoise logNoise;
+            PeakBackgroundValidation background{PeakValidationStatus::notEvaluated, false, {}, {}};
+        };
+
+        // One prespecified model and single-trace window. Fit log OLS on
+        // positive raw observations and run all six stages in order. Area
+        // and coverage minima are mandatory, with the units above. Background
+        // runs only after coverage passes; minimumSamplesPerSide is shared.
+        // The log-domain and raw-domain stages retain separate noise models.
+        // Their assumptions do not describe a single joint noise model.
+        // The combined verdict is a policy, without a calibrated joint p-value
+        // or a scan-wide error rate. It does not change production selection.
+        FullPeakCandidateValidation validatePeakCandidate(PeakModelKind model, const float *intensities,
+            size_t length, double fixedStep, const FullPeakCandidateOptions &options);
     }
 }
 
