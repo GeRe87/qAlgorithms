@@ -88,6 +88,53 @@ namespace
                 }
             }
             require(result.candidateIndices == expectedIndices, "Reported candidates use corrected acceptance only");
+            const auto kind = hyperbolicInput ? PeakModelKind::Hyperbolic : PeakModelKind::PiecewiseQuadratic;
+            const double step = hyperbolicInput ? .22 : 1;
+            const CandidateSearchPlan singleModel(length, {{kind, step, options, windows}}, alpha);
+            const AffineSampleAxis axis{50, -.4, AxisUnit::RetentionTime};
+            const auto mapped = findPeaks(singleModel, raw.data(), raw.size(), &axis);
+            require(mapped.measurements && mapped.measurements->axisUnit == AxisUnit::RetentionTime
+                && mapped.measurements->peaks.size() == 1, "Accepted windows produce one representative of the observed peak");
+            const auto &peak = mapped.measurements->peaks.front();
+            require(peak.selection.status == ApexSelectionStatus::selected && peak.properties
+                && std::find(mapped.candidateIndices.begin(), mapped.candidateIndices.end(), peak.selection.windowIndex)
+                    != mapped.candidateIndices.end(), "Representative comes only from accepted windows and has a joint estimate");
+            const auto &entry = mapped.windows[peak.selection.windowIndex];
+            require(peak.selection.first == 14 && std::abs(peak.properties->position
+                - (axis.origin + axis.unitsPerSample * (entry.window.center + entry.validation.stages.geometry.apex / step))) < 1e-12
+                && peak.properties->area > 0 && peak.properties->covariance[0] > 0 && peak.properties->covariance[3] > 0
+                && peak.properties->covariance[1] == peak.properties->covariance[2],
+                "Both kernels map position, total area and symmetric covariance");
+            if (!hyperbolicInput)
+            {
+                using Quadratic = Model<PeakModelKind::PiecewiseQuadratic>;
+                const auto &window = entry.window;
+                std::vector<float> logs(2 * window.scale + 1);
+                for (size_t i = 0; i < logs.size(); ++i)
+                {
+                    logs[i] = static_cast<float>(std::log(static_cast<double>(raw[window.center - window.scale + i])));
+                }
+                std::vector<RegCoeffs> fits;
+                Quadratic::runningFit(logs.data(), logs.size(), &fits);
+                const auto &fit = fits.back();
+                // Independent quadrature of the Gaussian-like curve and
+                // of its coefficient derivatives over both decaying flanks.
+                double gradient[4] = {};
+                constexpr double delta = .001;
+                for (int i = -40000; i < 40000; ++i)
+                {
+                    const double x = (i + .5) * delta;
+                    const double weight = delta * std::exp(Quadratic::logValue(&fit, x));
+                    gradient[0] += weight;
+                    gradient[1] += weight * x;
+                    gradient[x < 0 ? 2 : 3] += weight * x * x;
+                }
+                const double areaVariance = entry.validation.logNoise.logMse
+                    * Quadratic::covarianceProjection(gradient, fit.scale);
+                require(std::abs(peak.properties->area / (.4 * gradient[0]) - 1) < 1e-7
+                    && std::abs(peak.properties->covariance[3] / (.16 * areaVariance) - 1) < 1e-5,
+                    "Quadratic area and variance match independent integration in the measured units");
+            }
         }
         require(quadraticPassed && hyperbolicPassed, "Both kernels can return candidates through the family");
         bool wrongLengthRejected = false;

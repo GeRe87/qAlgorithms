@@ -1,5 +1,6 @@
 #include "qalgorithms_peak_search.h"
 #include "qalgorithms_peak_module.h"
+#include "detail/qalgorithms_peak_properties.h"
 #include "detail/qalgorithms_peak_candidates.h"
 #include "detail/qalgorithms_peak_inference.h"
 
@@ -21,8 +22,9 @@ namespace qAlgorithms
                 return left.center < right.center || (left.center == right.center && left.scale < right.scale);
             }
 
+            template<typename WindowResult>
             std::vector<UnresolvedSearchGroup> collectUnresolvedGroups(
-                const std::vector<PeakSearchResult> &windows, const std::vector<size_t> &indices,
+                const std::vector<WindowResult> &windows, const std::vector<size_t> &indices,
                 bool includeSingletons = false)
             {
                 std::vector<UnresolvedSearchGroup> groups;
@@ -72,8 +74,9 @@ namespace qAlgorithms
                 return groups;
             }
 
+            template<typename WindowResult, typename GetApex>
             DiagnosticApexGroup classifyApices(const float *raw, const UnresolvedSearchGroup &group,
-                const HyperbolicSearchResult &search)
+                const std::vector<WindowResult> &windows, GetApex getApex)
             {
                 DiagnosticApexGroup result;
                 for (size_t first = group.start; first <= group.end;)
@@ -92,10 +95,16 @@ namespace qAlgorithms
                 }
                 for (size_t index : group.windowIndices)
                 {
-                    const auto &entry = search.windows[index];
+                    const auto &entry = windows[index];
                     const auto &window = entry.window;
                     const double apex = static_cast<double>(window.center)
-                        + entry.inference.properties.front().apexU.value / search.fixedStep;
+                        + getApex(index);
+                    if (!std::isfinite(apex) || apex < static_cast<double>(group.start)
+                        || apex > static_cast<double>(group.end))
+                    {
+                        result.unassignedWindowIndices.push_back(index);
+                        continue;
+                    }
                     const auto left = static_cast<size_t>(std::floor(apex));
                     const auto right = static_cast<size_t>(std::ceil(apex));
                     // As in the quadratic selector, an observed maximum must
@@ -193,6 +202,91 @@ namespace qAlgorithms
                     selection.windowIndex = bestIndex;
                 }
                 return selection;
+            }
+
+            ApexSelection selectCandidateRepresentative(const float *raw, const ObservedApexHypothesis &maximum,
+                const CandidateSearchResult &result, const std::vector<CandidateFitOutput> &fits, size_t length)
+            {
+                ApexSelection selection{maximum.first, maximum.last};
+                if (maximum.windowIndices.empty())
+                {
+                    return selection;
+                }
+                size_t left = 0, right = length - 1;
+                for (size_t index : maximum.windowIndices)
+                {
+                    const auto &window = result.windows[index].window;
+                    left = std::max(left, window.center - window.scale);
+                    right = std::min(right, window.center + window.scale);
+                }
+                if (left >= maximum.first || right <= maximum.last || right - left + 1 < MINLENGTH)
+                {
+                    selection.status = ApexSelectionStatus::insufficientCommonSupport;
+                    return selection;
+                }
+                double best = std::numeric_limits<double>::infinity();
+                for (size_t index : maximum.windowIndices)
+                {
+                    const auto &window = result.windows[index].window;
+                    const auto &prediction = fits[index].logPrediction;
+                    if (prediction.size() != 2 * window.scale + 1)
+                    {
+                        selection.status = ApexSelectionStatus::numericalFailure;
+                        break;
+                    }
+                    double sse = 0;
+                    const size_t start = window.center - window.scale;
+                    for (size_t i = left; i <= right; ++i)
+                    {
+                        const double error = raw[i] - std::exp(prediction[i - start]);
+                        sse += error * error;
+                    }
+                    if (!std::isfinite(sse))
+                    {
+                        selection.status = ApexSelectionStatus::numericalFailure;
+                        break;
+                    }
+                    if (sse < best)
+                    {
+                        best = sse;
+                        selection.status = ApexSelectionStatus::selected;
+                        selection.windowIndex = index;
+                    }
+                    else if (sse == best)
+                    {
+                        selection.status = ApexSelectionStatus::ambiguous;
+                    }
+                }
+                if (selection.status != ApexSelectionStatus::selected)
+                {
+                    selection.windowIndex = std::numeric_limits<size_t>::max();
+                }
+                return selection;
+            }
+
+            std::optional<CandidateSearchResult::MeasuredProperties> mapCandidateProperties(
+                const CandidateFitOutput::Properties &source, size_t center, double step, const AffineSampleAxis &axis)
+            {
+                const long double signedScale = static_cast<long double>(axis.unitsPerSample) / step;
+                const long double factors[] = {signedScale, std::abs(signedScale)};
+                CandidateSearchResult::MeasuredProperties properties{
+                    static_cast<double>(axis.origin + static_cast<long double>(center) * axis.unitsPerSample + signedScale * source.apex),
+                    static_cast<double>(factors[1] * source.area), {}};
+                if (!std::isfinite(properties.position) || !(properties.area > 0 && std::isfinite(properties.area)))
+                {
+                    return std::nullopt;
+                }
+                for (size_t i = 0; i < properties.covariance.size(); ++i)
+                {
+                    const double original = source.covariance[i];
+                    const double mapped = static_cast<double>(original * factors[i / 2] * factors[i % 2]);
+                    if (!std::isfinite(mapped) || (original != 0 && mapped == 0))
+                    {
+                        return std::nullopt;
+                    }
+                    properties.covariance[i] = mapped;
+                }
+                return validPositionAreaCovariance(properties.covariance) ? std::optional{properties} : std::nullopt;
             }
         }
 
@@ -425,7 +519,10 @@ namespace qAlgorithms
                 result.apexGroups.reserve(classifiedGroups.size());
                 for (auto &group : classifiedGroups)
                 {
-                    auto apices = classifyApices(traces.front().intensity, group, search);
+                    auto apices = classifyApices(traces.front().intensity, group, search.windows, [&](size_t index)
+                    {
+                        return search.windows[index].inference.properties.front().apexU.value / search.fixedStep;
+                    });
                     if (selectRepresentatives)
                     {
                         for (const auto &maximum : apices.maxima)
@@ -566,17 +663,30 @@ namespace qAlgorithms
             }
         }
 
-        CandidateSearchResult CandidateSearchPlan::evaluate(const float *intensities, size_t length) const
+        CandidateSearchResult CandidateSearchPlan::evaluate(const float *intensities, size_t length,
+            const AffineSampleAxis *measurementAxis) const
         {
             if (length != length_ || intensities == nullptr || !std::all_of(intensities, intensities + length_,
                 [](float value) { return std::isfinite(value); }))
             {
                 throw std::invalid_argument("Candidate search requires a matching length and finite raw intensities");
             }
+            if (measurementAxis && (!std::isfinite(measurementAxis->origin)
+                || !std::isfinite(measurementAxis->unitsPerSample) || measurementAxis->unitsPerSample == 0))
+            {
+                throw std::invalid_argument("Candidate measurement requires a finite affine sample axis");
+            }
             CandidateSearchResult result;
             result.familySize = familySize_;
             result.backgroundAlphaPerWindow = windowAlpha_;
             result.windows.reserve(familySize_);
+            std::vector<CandidateFitOutput> fits;
+            std::vector<double> steps;
+            if (measurementAxis)
+            {
+                fits.resize(familySize_);
+                steps.resize(familySize_);
+            }
             for (const auto &model : models_)
             {
                 for (const auto &window : model.windows)
@@ -585,8 +695,14 @@ namespace qAlgorithms
                     entry.nativeModelName = model.name;
                     const float *raw = intensities + window.center - window.scale;
                     const size_t count = 2 * window.scale + 1;
-                    entry.validation = model.module ? model.module->validateCandidate(raw, count, model.fixedStep, model.options)
-                        : validatePeakCandidate(*model.kind, raw, count, model.fixedStep, model.options);
+                    const size_t index = result.windows.size();
+                    CandidateFitOutput *fit = measurementAxis ? &fits[index] : nullptr;
+                    if (fit)
+                    {
+                        steps[index] = model.fixedStep;
+                    }
+                    entry.validation = model.module ? model.module->validateCandidate(raw, count, model.fixedStep, model.options, fit)
+                        : validatePeakCandidate(*model.kind, raw, count, model.fixedStep, model.options, fit);
                     const auto &background = entry.validation.background;
                     if (std::isfinite(background.constant.pValue) && std::isfinite(background.linear.pValue))
                     {
@@ -600,12 +716,45 @@ namespace qAlgorithms
                     result.windows.push_back(std::move(entry));
                 }
             }
+            if (measurementAxis)
+            {
+                auto &output = result.measurements.emplace();
+                output.axisUnit = measurementAxis->unit;
+                const auto groups = collectUnresolvedGroups(result.windows, result.candidateIndices, true);
+                for (const auto &group : groups)
+                {
+                    const auto hypotheses = classifyApices(intensities, group, result.windows, [&](size_t index)
+                    {
+                        return result.windows[index].validation.stages.geometry.apex / steps[index];
+                    });
+                    output.unassignedWindowIndices.insert(output.unassignedWindowIndices.end(),
+                        hypotheses.unassignedWindowIndices.begin(), hypotheses.unassignedWindowIndices.end());
+                    for (const auto &maximum : hypotheses.maxima)
+                    {
+                        auto selection = selectCandidateRepresentative(intensities, maximum, result, fits, length);
+                        CandidateSearchResult::Measurement measurement{selection, std::nullopt};
+                        if (selection.status == ApexSelectionStatus::selected)
+                        {
+                            const size_t index = selection.windowIndex;
+                            if (fits[index].properties)
+                            {
+                                measurement.properties = mapCandidateProperties(*fits[index].properties,
+                                    result.windows[index].window.center, steps[index], *measurementAxis);
+                            }
+                        }
+                        output.peaks.push_back(std::move(measurement));
+                    }
+                }
+                std::sort(output.peaks.begin(), output.peaks.end(),
+                    [](const auto &a, const auto &b) { return a.selection.first < b.selection.first; });
+            }
             return result;
         }
 
-        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length)
+        CandidateSearchResult findPeaks(const CandidateSearchPlan &plan, const float *intensities, size_t length,
+            const AffineSampleAxis *measurementAxis)
         {
-            return plan.evaluate(intensities, length);
+            return plan.evaluate(intensities, length, measurementAxis);
         }
 
         MeasuredHyperbolicPeaks mapSelectedHyperbolicPeaks(

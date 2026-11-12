@@ -4,6 +4,7 @@
 #include "qalgorithms_peak_fit.h"
 #include "qalgorithms_peak_test_types.h"
 #include <optional>
+#include <array>
 
 namespace qAlgorithms
 {
@@ -139,6 +140,18 @@ namespace qAlgorithms
             PeakBackgroundValidation background{PeakValidationStatus::notEvaluated, false, {}, {}};
         };
 
+        struct CandidateFitOutput
+        {
+            // Fitted log intensities at the original window samples.
+            std::vector<double> logPrediction;
+            struct Properties
+            {
+                double apex, area; // window-relative coordinate and modeled total area
+                std::array<double, 4> covariance; // row-major position, area
+            };
+            std::optional<Properties> properties;
+        };
+
         // One prespecified model and single-trace window. Fit log OLS on
         // positive raw observations and run all six stages in order. Area
         // and coverage minima are mandatory, with the units above. Background
@@ -148,7 +161,7 @@ namespace qAlgorithms
         // The combined verdict is a policy, without a calibrated joint p-value
         // or a scan-wide error rate. It does not change production selection.
         FullPeakCandidateValidation validatePeakCandidate(PeakModelKind model, const float *intensities,
-            size_t length, double fixedStep, const FullPeakCandidateOptions &options);
+            size_t length, double fixedStep, const FullPeakCandidateOptions &options, CandidateFitOutput *output = nullptr);
     }
 }
 

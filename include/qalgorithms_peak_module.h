@@ -27,7 +27,7 @@ namespace qAlgorithms
             std::string name() const;
             size_t parameterCount() const;
             FullPeakCandidateValidation validateCandidate(const float *intensities, size_t length,
-                double step, const FullPeakCandidateOptions &options) const;
+                double step, const FullPeakCandidateOptions &options, CandidateFitOutput *output = nullptr) const;
 
         private:
             struct Module;

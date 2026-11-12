@@ -1,4 +1,5 @@
 #include "detail/qalgorithms_peak_cascade.h"
+#include "detail/qalgorithms_peak_properties.h"
 #include "cephes.h"
 #include "libcerf_reduced.h"
 
@@ -371,6 +372,131 @@ namespace qAlgorithms
                 return result;
             }
 
+        }
+
+        namespace
+        {
+            template<typename Evaluate, typename Covariance>
+            std::optional<CandidateFitOutput::Properties> describeFit(const std::array<double, 4> &parameters,
+                double mse, Evaluate evaluate, Covariance covariance)
+            {
+                if (!(mse > 0 && std::isfinite(mse)))
+                {
+                    return std::nullopt;
+                }
+                const auto value = evaluate(parameters);
+                const double area = std::exp(value[1]);
+                if (!std::isfinite(value[0]) || !(area > 0 && std::isfinite(area)))
+                {
+                    return std::nullopt;
+                }
+                std::array<std::array<double, 4>, 2> gradient{};
+                gradient[1][0] = 1; // derivative of log area with respect to the intercept
+                for (size_t i = 1; i < parameters.size(); ++i)
+                {
+                    const double delta = 1e-4 * std::max(std::abs(parameters[i]), 1e-3);
+                    auto left = parameters, right = parameters;
+                    left[i] -= delta;
+                    right[i] += delta;
+                    const auto coarseLeft = evaluate(left), coarseRight = evaluate(right);
+                    left[i] = parameters[i] - delta / 2;
+                    right[i] = parameters[i] + delta / 2;
+                    const auto fineLeft = evaluate(left), fineRight = evaluate(right);
+                    for (size_t j = 0; j < gradient.size(); ++j)
+                    {
+                        const double a = (3 * value[j] - 4 * fineLeft[j] + coarseLeft[j]) / delta;
+                        const double b = (-3 * value[j] + 4 * fineRight[j] - coarseRight[j]) / delta;
+                        const double derivative = (a + b) / 2;
+                        if (!std::isfinite(derivative) || !(std::abs(a - b) <= 1e-3 * std::max(std::abs(derivative), 1e-4)))
+                        {
+                            return std::nullopt;
+                        }
+                        gradient[j][i] = derivative;
+                    }
+                }
+                CandidateFitOutput::Properties result{value[0], area, {}};
+                for (size_t row = 0; row < 2; ++row)
+                {
+                    for (size_t col = row; col < 2; ++col)
+                    {
+                        long double projected = 0;
+                        for (size_t i = 0; i < parameters.size(); ++i)
+                        {
+                            for (size_t j = 0; j < parameters.size(); ++j)
+                            {
+                                projected += static_cast<long double>(gradient[row][i]) * covariance(i, j) * gradient[col][j];
+                            }
+                        }
+                        const double mapped = static_cast<double>(projected * mse * (row ? area : 1) * (col ? area : 1));
+                        if (!std::isfinite(mapped) || (row == col && !(mapped > 0)))
+                        {
+                            return std::nullopt;
+                        }
+                        result.covariance[2 * row + col] = result.covariance[2 * col + row] = mapped;
+                    }
+                }
+                return validPositionAreaCovariance(result.covariance) ? std::optional{result} : std::nullopt;
+            }
+        }
+
+        std::optional<CandidateFitOutput::Properties> describeLogFit(const RegCoeffs &fit, double mse)
+        {
+            using Quadratic = Model<PeakModelKind::PiecewiseQuadratic>;
+            return describeFit({{fit.b0, fit.b1, fit.b2, fit.b3}}, mse, [&](const auto &p)
+            {
+                RegCoeffs c{p[0], p[1], p[2], p[3], fit.scale, fit.x0};
+                if (!hasPeakShape(c))
+                {
+                    return std::array<double, 2>{{unavailable, unavailable}};
+                }
+                const double apex = Quadratic::apex(&c), peak = c.b1 * apex / 2;
+                const double total = quadraticHalfArea(-c.b1, c.b2, peak) + quadraticHalfArea(c.b1, c.b3, peak);
+                return std::array<double, 2>{{apex, c.b0 + peak + std::log(total)}};
+            }, [&](size_t i, size_t j)
+            {
+                double unit[4] = {};
+                unit[i] = 1;
+                const double a = Quadratic::covarianceProjection(unit, fit.scale);
+                if (i == j)
+                {
+                    return a;
+                }
+                unit[i] = 0;
+                unit[j] = 1;
+                const double b = Quadratic::covarianceProjection(unit, fit.scale);
+                unit[i] = 1;
+                return (Quadratic::covarianceProjection(unit, fit.scale) - a - b) / 2;
+            });
+        }
+
+        std::optional<CandidateFitOutput::Properties> describeLogFit(const HyperbolicModel::Fit &fit,
+            const HyperbolicModel::Geometry &geometry, double mse)
+        {
+            const auto &c = fit.locals.front();
+            const auto &window = geometry.at(fit.scale);
+            // Our gradient order starts with the intercept. The kernel's
+            // factor order starts with the shared slope.
+            constexpr size_t indices[] = {1, 0, 2, 3};
+            try
+            {
+                return describeFit({{c.intercept, fit.sharedSlope, c.curvature, c.skew}}, mse, [](const auto &p)
+                {
+                    const HyperbolicModel::Coefficients coefficients{p[0], p[2], p[3]};
+                    return std::array<double, 2>{{detail::hyperbolic::apexU(coefficients, p[1]),
+                        detail::hyperbolic::logAreaU(coefficients, p[1])}};
+                }, [&](size_t i, size_t j)
+                {
+                    return hyperbolicCovarianceFactor(window, 1, indices[i], indices[j]);
+                });
+            }
+            catch (const std::domain_error &)
+            {
+                return std::nullopt;
+            }
+            catch (const std::runtime_error &)
+            {
+                return std::nullopt;
+            }
         }
 
         bool hasPeakShape(const RegCoeffs &c)

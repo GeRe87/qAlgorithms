@@ -32,6 +32,7 @@ def main():
         subprocess.run(build_command, check=True)
         valid = Path((build / f"external_gaussian-{config}.txt").read_text())
         incompatible = Path((build / f"incompatible_gaussian-{config}.txt").read_text())
+        validation_only = Path((build / f"validation_only_gaussian-{config}.txt").read_text())
 
         def run(module, minimum="100", values=samples):
             return subprocess.run([str(host), "--peak-model-module", str(module), "1", minimum, ".7", *values],
@@ -57,10 +58,11 @@ def main():
         failed_fit = stages(run(valid, values=[".5", *samples[1:]]))
         assert failed_fit["status"] == "failed" and failed_fit["apex"] == "notEvaluated", failed_fit
 
-        def search(values, *, mixed=False, rotations=399, alpha=".05", minimum_area="100"):
+        def search(values, *, mixed=False, rotations=399, alpha=".05", minimum_area="100", axis=None, module=valid):
             builtin = ["--quadratic", "100", ".7"] if mixed else []
-            return subprocess.run([str(host), "--peak-model-module-search", str(valid), "1", minimum_area, ".7",
-                                   str(alpha), str(rotations), "7", "8", *builtin, *values],
+            axis_args = ["--axis", *map(str, axis)] if axis else []
+            return subprocess.run([str(host), "--peak-model-module-search", str(module), "1", minimum_area, ".7",
+                                   str(alpha), str(rotations), "7", "8", *builtin, *axis_args, *values],
                                   capture_output=True, text=True)
 
         def family(process):
@@ -93,6 +95,23 @@ def main():
         assert all(math.isnan(row[-1]) for row in skipped_windows if row[3] == "unavailable"), skipped_windows
         budget = search(samples, mixed=True, rotations=99)
         assert budget.returncode != 0 and "Rotation budget cannot resolve" in budget.stderr, budget
+
+        def measurement(process):
+            assert process.returncode == 0, (process.stdout, process.stderr)
+            peaks = [list(map(float, row[5:].split(","))) for row in process.stdout.splitlines() if row.startswith("peak=")]
+            assert len(peaks) == 1, process.stdout
+            return peaks[0]
+
+        base_peak = measurement(search(samples, axis=(0, 1)))
+        reversed_peak = measurement(search(samples, axis=(150, -.25)))
+        assert reversed_peak[:3] == base_peak[:3] and base_peak[:2] == [8, 8]
+        assert math.isclose(reversed_peak[3], 150 - .25 * base_peak[3])
+        assert math.isclose(reversed_peak[4], .25 * base_peak[4])
+        assert base_peak[5] > 0 and base_peak[8] > 0 and base_peak[6] != 0, base_peak
+        for i, factor in enumerate((.0625, -.0625, -.0625, .0625)):
+            assert math.isclose(reversed_peak[5 + i], factor * base_peak[5 + i]), reversed_peak
+        old_abi = search(samples, axis=(0, 1), module=validation_only)
+        assert old_abi.returncode == 0 and "unmeasured=8,8," in old_abi.stdout and "peak=" not in old_abi.stdout
         subprocess.run([ownership_test, str(valid)], check=True)
 
     assert hashlib.sha256(host.read_bytes()).hexdigest() == original_hash
