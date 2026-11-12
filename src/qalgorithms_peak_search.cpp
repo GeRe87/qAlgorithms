@@ -19,7 +19,8 @@ namespace qAlgorithms
             }
 
             std::vector<UnresolvedSearchGroup> collectUnresolvedGroups(
-                const std::vector<PeakSearchResult> &windows, const std::vector<size_t> &indices)
+                const std::vector<PeakSearchResult> &windows, const std::vector<size_t> &indices,
+                bool includeSingletons = false)
             {
                 std::vector<UnresolvedSearchGroup> groups;
                 std::vector<size_t> order = indices;
@@ -33,7 +34,7 @@ namespace qAlgorithms
                 UnresolvedSearchGroup group;
                 auto appendGroup = [&]()
                 {
-                    if (group.windowIndices.size() > 1)
+                    if (group.windowIndices.size() > 1 || (includeSingletons && !group.windowIndices.empty()))
                     {
                         std::sort(group.windowIndices.begin(), group.windowIndices.end());
                         groups.push_back(std::move(group));
@@ -109,6 +110,86 @@ namespace qAlgorithms
                     }
                 }
                 return result;
+            }
+
+            struct SelectionFit
+            {
+                size_t index;
+                HyperbolicModel::Coefficients coefficients;
+                double slope;
+            };
+
+            HyperbolicApexSelection selectRepresentative(const float *raw, const ObservedApexHypothesis &maximum,
+                const HyperbolicSearchResult &search, const std::vector<SelectionFit> &fits)
+            {
+                HyperbolicApexSelection selection{maximum.first, maximum.last};
+                const auto &indices = maximum.windowIndices;
+                if (indices.empty())
+                {
+                    return selection;
+                }
+                size_t start = 0, end = search.length - 1;
+                for (size_t index : indices)
+                {
+                    const auto &window = search.windows[index].window;
+                    start = std::max(start, window.center - window.scale);
+                    end = std::min(end, window.center + window.scale);
+                }
+                selection.status = ApexSelectionStatus::insufficientCommonSupport;
+                if (start >= maximum.first || end <= maximum.last || end - start + 1 < MINLENGTH)
+                {
+                    return selection;
+                }
+                if (indices.size() == 1)
+                {
+                    selection.status = ApexSelectionStatus::selected;
+                    selection.windowIndex = indices.front();
+                    return selection;
+                }
+                double best = std::numeric_limits<double>::infinity();
+                size_t bestIndex = indices.front();
+                bool ambiguous = false;
+                for (size_t index : indices)
+                {
+                    const auto fit = std::lower_bound(fits.begin(), fits.end(), index,
+                        [](const SelectionFit &candidate, size_t i) { return candidate.index < i; });
+                    const auto &window = search.windows[index].window;
+                    double sse = 0;
+                    for (size_t i = start; i <= end; ++i)
+                    {
+                        const double u = search.fixedStep * (static_cast<double>(i) - static_cast<double>(window.center));
+                        const double error = raw[i] - std::exp(detail::hyperbolic::predict(fit->coefficients, fit->slope, u));
+                        sse += error * error;
+                    }
+                    if (!std::isfinite(sse))
+                    {
+                        selection.status = ApexSelectionStatus::numericalFailure;
+                        return selection;
+                    }
+                    if (sse < best)
+                    {
+                        best = sse;
+                        bestIndex = index;
+                        ambiguous = false;
+                    }
+                    else if (sse == best)
+                    {
+                        const auto &a = search.windows[bestIndex].inference;
+                        const auto &b = search.windows[index].inference;
+                        const auto &p = a.properties.front();
+                        const auto &q = b.properties.front();
+                        const double apexA = static_cast<double>(search.windows[bestIndex].window.center) + p.apexU.value / search.fixedStep;
+                        const double apexB = static_cast<double>(window.center) + q.apexU.value / search.fixedStep;
+                        ambiguous = ambiguous || apexA != apexB || p.height.value != q.height.value
+                            || p.areaU.value != q.areaU.value || a.covariance != b.covariance;
+                    }
+                }
+                selection.status = ambiguous ? ApexSelectionStatus::ambiguous : ApexSelectionStatus::selected;
+                if (!ambiguous)
+                {
+                    selection.windowIndex = bestIndex;
+                }
+                return selection;
             }
         }
 
@@ -228,8 +309,13 @@ namespace qAlgorithms
 
         SegmentedHyperbolicSearchResult HyperbolicSearchPlan::evaluateSegmented(
             const std::vector<AlignedIntensityTrace> &traces, double coordinateStep,
-            double relativeTolerance, double threshold, SegmentedInferenceDetail inferenceDetail) const
+            double relativeTolerance, double threshold, SegmentedInferenceDetail inferenceDetail,
+            bool selectRepresentatives) const
         {
+            if (selectRepresentatives && traces.size() != 1)
+            {
+                throw std::invalid_argument("Representative selection requires a single trace");
+            }
             if (inferenceDetail != SegmentedInferenceDetail::allWindows
                 && inferenceDetail != SegmentedInferenceDetail::supportedWindows)
             {
@@ -265,6 +351,7 @@ namespace qAlgorithms
             const HyperbolicModel::Geometry cache(maxScale, fixedStep_);
             std::vector<std::vector<float>> logs(traces.size());
             std::vector<const float *> raw(traces.size()), logPointers(traces.size());
+            std::vector<SelectionFit> selectionFits;
             auto requested = windows_.begin();
             for (const auto &span : result.segmentation.spans)
             {
@@ -315,16 +402,45 @@ namespace qAlgorithms
                     if (entry.inference.status == InferenceStatus::available && entry.inference.observedSupportSufficient)
                     {
                         result.diagnosticIndices.push_back(index);
+                        if (selectRepresentatives)
+                        {
+                            auto coefficients = fit.locals.front();
+                            coefficients.intercept = entry.inference.properties.front().correctedIntercept;
+                            selectionFits.push_back({index, coefficients, fit.sharedSlope});
+                        }
                     }
                 });
             }
-            result.diagnosticGroups = collectUnresolvedGroups(search.windows, result.diagnosticIndices);
+            auto groups = collectUnresolvedGroups(search.windows, result.diagnosticIndices, selectRepresentatives);
+            if (!selectRepresentatives)
+            {
+                result.diagnosticGroups = std::move(groups);
+            }
             if (traces.size() == 1)
             {
-                result.apexGroups.reserve(result.diagnosticGroups.size());
-                for (const auto &group : result.diagnosticGroups)
+                auto &classifiedGroups = selectRepresentatives ? groups : result.diagnosticGroups;
+                result.apexGroups.reserve(classifiedGroups.size());
+                for (auto &group : classifiedGroups)
                 {
-                    result.apexGroups.push_back(classifyApices(traces.front().intensity, group, search));
+                    auto apices = classifyApices(traces.front().intensity, group, search);
+                    if (selectRepresentatives)
+                    {
+                        for (const auto &maximum : apices.maxima)
+                        {
+                            result.apexSelections.push_back(selectRepresentative(traces.front().intensity, maximum,
+                                search, selectionFits));
+                        }
+                        if (group.windowIndices.size() == 1)
+                        {
+                            if (!apices.unassignedWindowIndices.empty())
+                            {
+                                result.unassignedSingletons.push_back(group.windowIndices.front());
+                            }
+                            continue;
+                        }
+                        result.diagnosticGroups.push_back(std::move(group));
+                    }
+                    result.apexGroups.push_back(std::move(apices));
                 }
             }
             return result;
@@ -381,7 +497,8 @@ namespace qAlgorithms
                     const auto &segmentation = *request.segmentation;
                     return request.hyperbolicPlan->evaluateSegmented(
                         {{request.intensity, segmentation.coordinates, request.length}},
-                        segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold, segmentation.detail);
+                        segmentation.coordinateStep, segmentation.relativeTolerance, segmentation.threshold,
+                        segmentation.detail, segmentation.selectRepresentatives);
                 }
                 return request.hyperbolicPlan->evaluate({request.intensity});
             }

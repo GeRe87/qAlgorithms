@@ -73,6 +73,15 @@ namespace qAlgorithms
             std::vector<size_t> unassignedWindowIndices;
         };
 
+        enum class ApexSelectionStatus { selected, unsupported, insufficientCommonSupport, ambiguous, numericalFailure };
+
+        struct HyperbolicApexSelection
+        {
+            size_t first = 0, last = 0; // observed maximum plateau
+            ApexSelectionStatus status = ApexSelectionStatus::unsupported;
+            size_t windowIndex = std::numeric_limits<size_t>::max(); // valid when selected
+        };
+
         struct SegmentedHyperbolicSearchResult
         {
             HyperbolicSearchResult search;
@@ -85,6 +94,15 @@ namespace qAlgorithms
             // Single-trace only. One entry per diagnosticGroups element, with
             // unsupported observed maxima and unassigned fits retained.
             std::vector<DiagnosticApexGroup> apexGroups;
+            // Opt-in, single-trace, ordered by observed maximum. Selection
+            // minimizes raw-intensity SSE on the intersection of the fit
+            // windows, with at least MINLENGTH samples and a sample on each
+            // side of the plateau. Exact ties between different estimates
+            // are ambiguous. Covariance in search.windows is fixed-window.
+            std::vector<HyperbolicApexSelection> apexSelections;
+            // Singleton fits without an assignable observed maximum. For
+            // overlapping windows the same information lives in apexGroups.
+            std::vector<size_t> unassignedSingletons;
         };
 
         // A data-independent, fixed family of windows, canonicalized by center
@@ -114,7 +132,8 @@ namespace qAlgorithms
             SegmentedHyperbolicSearchResult evaluateSegmented(const std::vector<AlignedIntensityTrace> &traces,
                 double coordinateStep, double relativeTolerance = 0,
                 double threshold = 2.7182818284590452,
-                SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows) const;
+                SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows,
+                bool selectRepresentatives = false) const;
 
         private:
             size_t length_;
@@ -157,6 +176,7 @@ namespace qAlgorithms
                 double relativeTolerance = 0;
                 double threshold = 2.7182818284590452;
                 SegmentedInferenceDetail detail = SegmentedInferenceDetail::allWindows;
+                bool selectRepresentatives = false;
             };
             const Segmentation *segmentation = nullptr; // optional, Hyperbolic only
         };
