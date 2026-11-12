@@ -58,6 +58,18 @@ namespace qAlgorithms
 
         enum class SegmentedWindowStatus { outsideEligibleSpan, evaluated };
 
+        struct ObservedApexHypothesis
+        {
+            size_t first = 0, last = 0; // inclusive observed maximum plateau
+            std::vector<size_t> windowIndices;
+        };
+
+        struct DiagnosticApexGroup
+        {
+            std::vector<ObservedApexHypothesis> maxima;
+            std::vector<size_t> unassignedWindowIndices;
+        };
+
         struct SegmentedHyperbolicSearchResult
         {
             HyperbolicSearchResult search;
@@ -67,6 +79,9 @@ namespace qAlgorithms
             // Indices address search.windows; groups are inclusive sample envelopes.
             std::vector<size_t> diagnosticIndices;
             std::vector<UnresolvedSearchGroup> diagnosticGroups;
+            // Single-trace only. One entry per diagnosticGroups element, with
+            // unsupported observed maxima and unassigned fits retained.
+            std::vector<DiagnosticApexGroup> apexGroups;
         };
 
         // A data-independent, fixed family of windows, canonicalized by center
