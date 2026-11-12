@@ -205,5 +205,17 @@ trace's variation in the fit window. Overlapping candidates are ranked by
 explained variation times the contributing scan count and grid step.
 These heuristics
 operate on the shared shape. A centroid can recur in successive windows.
-The CSV is window-level output for evaluating the method before linking
-centroids across windows or estimating their scan-to-scan m/z variation.
+The window CSV includes the assigned track ID. Linking requires a common
+contributing scan, mutual coverage of the fitted apices and an m/z
+distance within the larger of two grid steps or one quarter of the
+shorter fit interval. Each window contributes at most one centroid to
+each track. Eligible links are assigned in order of increasing m/z
+distance. A track can resume while the FIFO windows still overlap.
+
+`*_superspectrum_tracks.csv` contains one row per track and contributing
+scan. If several fits include the same scan, its height comes from the
+window in which the scan is closest to the middle. Ties use the earlier
+window. The mean and sample standard deviation use one fitted m/z
+position per linked window. A single-window track has an empty
+standard deviation. The standard deviation describes variation among
+overlapping windows, which share profile data.

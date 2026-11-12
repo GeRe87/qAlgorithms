@@ -1,4 +1,5 @@
 #include "qalgorithms_superspectrum.h"
+#include "qalgorithms_superspectrum_tracks.h"
 #include "qalgorithms_qpeaks.h"
 #include "qalgorithms_read_file.h"
 
@@ -421,8 +422,7 @@ namespace qAlgorithms
             }
         }
 
-        void writeCandidates(std::ostream &csv, const std::deque<ProfileScan> &scans,
-            std::vector<WindowCandidate> &candidates, size_t &centroid)
+        void selectCandidates(std::vector<WindowCandidate> &selected, std::vector<WindowCandidate> &candidates)
         {
             std::sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b)
             {
@@ -441,7 +441,7 @@ namespace qAlgorithms
                 return a.scans < b.scans;
             });
             std::map<double, double> occupied;
-            for (const auto &window : candidates)
+            for (auto &window : candidates)
             {
                 const auto &candidate = window.candidate;
                 const auto &fit = candidate.fit;
@@ -453,17 +453,49 @@ namespace qAlgorithms
                     (next != occupied.begin() && std::prev(next)->second >= first))
                     continue;
                 occupied.emplace_hint(next, first, last);
+                selected.push_back(std::move(window));
+            }
+        }
+
+        void writeWindow(std::ostream &csv, SuperspectrumTracks &tracks,
+            const std::deque<ProfileScan> &scans, const std::vector<WindowCandidate> &selected)
+        {
+            std::vector<SuperspectrumObservation> observations;
+            observations.reserve(selected.size());
+            for (const auto &window : selected)
+            {
+                const auto &candidate = window.candidate;
+                const auto &fit = candidate.fit;
+                const double step = window.step;
                 const double center = mass(window.center, step);
                 const double apexMz = std::fma(candidate.apex, step, center);
-                ++centroid;
+                SuperspectrumObservation observation{apexMz, mass(window.center - fit.scale, step),
+                    mass(window.center + fit.scale, step), step, {}};
                 for (size_t i = 0; i < window.scans.size(); ++i)
                 {
-                    const auto &scan = scans[window.scans[i]];
+                    const size_t position = window.scans[i];
+                    const auto &scan = scans[position];
                     const double height = std::exp(fit.b0[i] + fit.b1 * candidate.apex / 2);
-                    csv << scans.front().index << ',' << scans.back().index << ',' << centroid << ','
-                        << scan.index << ',' << scan.retentionTime << ',' << apexMz << ',' << height << ','
+                    const size_t middle = scansPerWindow / 2;
+                    const size_t distance = position < middle ? middle - position : position - middle;
+                    observation.heights.push_back({scan.index, scan.retentionTime, height, distance});
+                }
+                observations.push_back(std::move(observation));
+            }
+            const auto ids = tracks.append(observations, scans.front().index);
+            for (size_t i = 0; i < selected.size(); ++i)
+            {
+                const auto &window = selected[i];
+                const auto &candidate = window.candidate;
+                const auto &fit = candidate.fit;
+                const double step = window.step;
+                const double center = mass(window.center, step);
+                for (const auto &height : observations[i].heights)
+                {
+                    csv << scans.front().index << ',' << scans.back().index << ',' << i + 1 << ','
+                        << height.scan << ',' << height.retentionTime << ',' << observations[i].mz << ',' << height.height << ','
                         << center << ',' << fit.scale << ',' << fit.b1 << ',' << fit.b2 << ',' << fit.b3
-                        << ',' << candidate.logRise << ',' << step << '\n';
+                        << ',' << candidate.logRise << ',' << step << ',' << ids[i] << '\n';
                 }
             }
         }
@@ -535,7 +567,7 @@ namespace qAlgorithms
             }
         }
 
-        void fitWindow(std::ostream &csv, std::deque<ProfileScan> &scans,
+        void fitWindow(std::ostream &csv, SuperspectrumTracks &tracks, std::deque<ProfileScan> &scans,
             const GridSettings &grid)
         {
             std::vector<ProfileRun> runs;
@@ -546,7 +578,7 @@ namespace qAlgorithms
                     runs.push_back(run);
                 }
             std::stable_sort(runs.begin(), runs.end(), [](const auto &a, const auto &b) { return a.lower < b.lower; });
-            size_t centroid = 0;
+            std::vector<WindowCandidate> selected;
             for (size_t first = 0; first < runs.size();)
             {
                 size_t end = first + 1;
@@ -571,18 +603,31 @@ namespace qAlgorithms
                 }
                 if (regionalGrids < static_cast<size_t>(lastRegion - firstRegion + 1))
                     fitComponent(candidates, scans, runs, first, end, grid.fallback, grid, runs[first].lower, upper);
-                writeCandidates(csv, scans, candidates, centroid);
+                selectCandidates(selected, candidates);
                 first = end;
             }
+            writeWindow(csv, tracks, scans, selected);
         }
     }
 
     void processSuperspectra(const XML_File &file, const std::vector<uint32_t> &indices,
         const std::vector<float> &retentionTimes, const std::filesystem::path &output,
+        const std::filesystem::path &trackOutput,
         const SuperspectrumSettings *fixed, bool noOverwrite, bool silent)
     {
-        if (noOverwrite && std::filesystem::exists(output))
-            return;
+        if (noOverwrite)
+        {
+            const bool hasCentroids = std::filesystem::exists(output);
+            const bool hasTracks = std::filesystem::exists(trackOutput);
+            if (hasCentroids != hasTracks)
+                throw std::runtime_error("Superspectrum output is missing one CSV; rerun without --skip-existing");
+            if (hasCentroids)
+            {
+                if (!std::filesystem::is_regular_file(output) || !std::filesystem::is_regular_file(trackOutput))
+                    throw std::runtime_error("Superspectrum output paths must both be regular files");
+                return;
+            }
+        }
         if ((fixed && !(fixed->gridStep > 0 && std::isfinite(fixed->gridStep) && fixed->maxGap > 0 &&
               std::isfinite(fixed->maxGap) && fixed->maxHalfWidth >= 2 &&
               fixed->maxHalfWidth <= maxscale_global)) || retentionTimes.size() != indices.size())
@@ -592,15 +637,21 @@ namespace qAlgorithms
         auto staging = output;
         staging += ".partial";
         const auto partial = staging / "centroids.csv";
+        const auto partialTracks = staging / "tracks.csv";
+        const auto backup = staging / "previous-tracks.csv";
         if (!std::filesystem::create_directory(staging))
             throw std::runtime_error("Superspectrum partial output already exists");
+        bool publishedTracks = false;
         try
         {
             std::ofstream csv(partial);
-            if (!csv)
+            std::ofstream trackCsv(partialTracks);
+            if (!csv || !trackCsv)
                 throw std::runtime_error("Could not open superspectrum output");
-            csv << "firstScan,lastScan,centroid,scan,retentionTimeSeconds,mz,height,gridCenterMz,halfWidth,b1,b2,b3,logRise,gridStepMz\n";
+            csv << "firstScan,lastScan,centroid,scan,retentionTimeSeconds,mz,height,gridCenterMz,halfWidth,b1,b2,b3,logRise,gridStepMz,track\n";
             csv << std::setprecision(std::numeric_limits<double>::max_digits10);
+            trackCsv << std::setprecision(std::numeric_limits<double>::max_digits10);
+            SuperspectrumTracks tracks(trackCsv, scansPerWindow);
             std::deque<ProfileScan> scans;
             for (size_t i = 0; grid.fallback.gridStep > 0 && i < indices.size(); ++i)
             {
@@ -609,25 +660,41 @@ namespace qAlgorithms
                 scans.push_back(std::move(scan));
                 if (scans.size() == scansPerWindow)
                 {
-                    fitWindow(csv, scans, grid);
+                    fitWindow(csv, tracks, scans, grid);
                     scans.pop_front();
                 }
             }
+            tracks.finish();
             csv.close();
-            if (!csv)
+            trackCsv.close();
+            if (!csv || !trackCsv)
                 throw std::runtime_error("Could not complete superspectrum output");
-            if (!noOverwrite || !std::filesystem::exists(output))
-                std::filesystem::rename(partial, output);
-            else
-                std::filesystem::remove(partial);
-            std::filesystem::remove(staging);
+            if (noOverwrite && (std::filesystem::exists(output) || std::filesystem::exists(trackOutput)))
+                throw std::runtime_error("Superspectrum output appeared while processing");
+            if (std::filesystem::exists(trackOutput))
+            {
+                if (!std::filesystem::is_regular_file(trackOutput))
+                    throw std::runtime_error("Superspectrum track output is not a regular file");
+                std::filesystem::rename(trackOutput, backup);
+            }
+            std::filesystem::rename(partialTracks, trackOutput);
+            publishedTracks = true;
+            std::filesystem::rename(partial, output);
         }
         catch (...)
         {
             std::error_code error;
+            if (publishedTracks)
+                std::filesystem::remove(trackOutput, error);
+            if (std::filesystem::exists(backup, error))
+                std::filesystem::rename(backup, trackOutput, error);
             std::filesystem::remove(partial, error);
+            std::filesystem::remove(partialTracks, error);
             std::filesystem::remove(staging, error);
             throw;
         }
+        std::error_code error;
+        std::filesystem::remove(backup, error);
+        std::filesystem::remove(staging, error);
     }
 }

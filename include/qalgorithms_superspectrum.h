@@ -19,6 +19,7 @@ namespace qAlgorithms
 
     void processSuperspectra(const XML_File &file, const std::vector<uint32_t> &indices,
         const std::vector<float> &retentionTimes, const std::filesystem::path &output,
+        const std::filesystem::path &trackOutput,
         const SuperspectrumSettings *fixed, bool noOverwrite, bool silent);
 }
 
