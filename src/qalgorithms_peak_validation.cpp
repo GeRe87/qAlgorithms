@@ -1,4 +1,4 @@
-#include "qalgorithms_peak_validation.h"
+#include "detail/qalgorithms_peak_cascade.h"
 #include "cephes.h"
 #include "libcerf_reduced.h"
 
@@ -15,34 +15,6 @@ namespace qAlgorithms
     {
         namespace
         {
-            PeakGeometryValidation checkGeometry(bool shape, double apex, size_t scale,
-                double step, size_t minimumSamplesPerSide)
-            {
-                PeakGeometryValidation result;
-                result.form = shape ? PeakValidationStatus::passed : PeakValidationStatus::failed;
-                if (!shape)
-                {
-                    return result;
-                }
-                result.apex = apex;
-                result.apexSupport = PeakValidationStatus::unavailable;
-                if (scale == 0 || !(step > 0 && std::isfinite(step)))
-                {
-                    return result;
-                }
-                const double edge = static_cast<double>(scale) * step;
-                if (!std::isfinite(edge))
-                {
-                    return result;
-                }
-                const double side = minimumSamplesPerSide == 0 ? 0
-                    : (static_cast<double>(scale) - static_cast<double>(minimumSamplesPerSide - 1)) * step;
-                const bool supported = std::isfinite(apex) && (minimumSamplesPerSide == 0
-                    ? std::abs(apex) <= edge : std::abs(apex) < side);
-                result.apexSupport = supported ? PeakValidationStatus::passed : PeakValidationStatus::failed;
-                return result;
-            }
-
             bool validNoise(double mse, size_t df, double alpha)
             {
                 return mse > 0 && std::isfinite(mse) && df > 0 && alpha > 0 && alpha < 1;
@@ -399,34 +371,6 @@ namespace qAlgorithms
                 return result;
             }
 
-            template<typename CheckConfidence, typename CheckCoverage, typename CheckArea>
-            PeakCandidateValidation checkCandidate(PeakGeometryValidation geometry, CheckConfidence checkConfidence,
-                std::optional<double> minimumCoverage, CheckCoverage checkCoverage,
-                std::optional<double> minimumArea, CheckArea checkArea)
-            {
-                PeakCandidateValidation result{geometry};
-                if (geometry.apexSupport == PeakValidationStatus::passed)
-                {
-                    result.formConfidence = checkConfidence();
-                }
-                if (result.formConfidence != PeakValidationStatus::passed)
-                {
-                    return result;
-                }
-                if (minimumArea)
-                {
-                    result.areaEvidence = checkArea(*minimumArea);
-                    if (result.areaEvidence.status != PeakValidationStatus::passed)
-                    {
-                        return result;
-                    }
-                }
-                if (minimumCoverage)
-                {
-                    result.windowCoverage = checkCoverage(*minimumCoverage);
-                }
-                return result;
-            }
         }
 
         bool hasPeakShape(const RegCoeffs &c)
@@ -443,7 +387,7 @@ namespace qAlgorithms
         PeakGeometryValidation validatePeakGeometry(const RegCoeffs &c, size_t minimum)
         {
             const bool shape = hasPeakShape(c);
-            return checkGeometry(shape, shape ? Model<PeakModelKind::PiecewiseQuadratic>::apex(&c) : 0,
+            return checkPeakGeometry(shape, shape ? Model<PeakModelKind::PiecewiseQuadratic>::apex(&c) : 0,
                 c.scale, 1, minimum);
         }
 
@@ -451,7 +395,7 @@ namespace qAlgorithms
             size_t scale, double step, size_t minimum)
         {
             const bool shape = hasPeakShape(c, slope);
-            return checkGeometry(shape, shape ? detail::hyperbolic::apexU(c, slope) : 0, scale, step, minimum);
+            return checkPeakGeometry(shape, shape ? detail::hyperbolic::apexU(c, slope) : 0, scale, step, minimum);
         }
 
         PeakValidationStatus validatePeakFormConfidence(const RegCoeffs &c, double mse, size_t df, double alpha)
@@ -521,11 +465,11 @@ namespace qAlgorithms
         PeakCandidateValidation validatePeakCandidate(const RegCoeffs &c, const PeakFormNoise &noise, size_t minimum,
             std::optional<double> minimumCoverage, std::optional<double> minimumArea)
         {
-            return checkCandidate(validatePeakGeometry(c, minimum), [&]()
+            return runPeakCascade(validatePeakGeometry(c, minimum), [&]()
             {
                 return validatePeakFormConfidence(c, noise.logMse, noise.residualDf, noise.alpha);
-            }, minimumCoverage, [&](double threshold) { return validatePeakWindowCoverage(c, noise, threshold); },
-                minimumArea, [&](double threshold) { return validatePeakAreaEvidence(c, noise, threshold); });
+            }, minimumArea, [&](double threshold) { return validatePeakAreaEvidence(c, noise, threshold); },
+                minimumCoverage, [&](double threshold) { return validatePeakWindowCoverage(c, noise, threshold); });
         }
 
         PeakCandidateValidation validatePeakCandidate(const HyperbolicModel::Fit &fit, size_t trace,
@@ -538,11 +482,11 @@ namespace qAlgorithms
                 result.geometry.form = PeakValidationStatus::unavailable;
                 return result;
             }
-            return checkCandidate(validatePeakGeometry(fit.locals[trace], fit.sharedSlope, fit.scale, geometry.step(), minimum), [&]()
+            return runPeakCascade(validatePeakGeometry(fit.locals[trace], fit.sharedSlope, fit.scale, geometry.step(), minimum), [&]()
             {
                 return validatePeakFormConfidence(fit, trace, geometry, noise.logMse, noise.residualDf, noise.alpha);
-            }, minimumCoverage, [&](double threshold) { return validatePeakWindowCoverage(fit, trace, geometry, noise, threshold); },
-                minimumArea, [&](double threshold) { return validatePeakAreaEvidence(fit, trace, geometry, noise, threshold); });
+            }, minimumArea, [&](double threshold) { return validatePeakAreaEvidence(fit, trace, geometry, noise, threshold); },
+                minimumCoverage, [&](double threshold) { return validatePeakWindowCoverage(fit, trace, geometry, noise, threshold); });
         }
 
         PeakWindowCoverage validatePeakWindowCoverage(const RegCoeffs &c, const PeakFormNoise &noise, double minimum)
