@@ -97,3 +97,33 @@ the signature in the ABI header. It supplies position, total area and
 their joint covariance from the same log-OLS fit. A validation-only module
 still participates in selection. A selected window without valid joint
 properties is reported as `unmeasured`.
+
+## Use the regular mzML workflow
+
+```text
+qAlgorithms -i profile.mzML -o output --calibrated-peaks MODEL STEP MIN_AREA_MZ MIN_COVERAGE MIN_SCALE MAX_SCALE ALPHA ROTATIONS
+```
+
+`MODEL` is `quadratic`, `hyperbolic` or `module:PATH`. Quadratic requires
+`STEP=1` and a maximum scale within the compiled coefficient table.
+The other models use their declared fit-coordinate step. Native windows
+must have more observations than fitted parameters.
+`MIN_AREA_MZ` is in intensity times m/z and is converted to fit units
+before the area test.
+
+The mode uses the normal mzML reader, MS1 profile selection and polarity
+handling. It writes `<input>_calibrated_peaks.csv` per polarity. The CSV
+contains one summary per scan, measured representatives and explicit
+unresolved or unassigned records. Position is in m/z, area is in intensity
+times m/z, and the covariance columns describe those two quantities.
+This mode ends after scan-level peak output. The existing feature workflow
+remains the default when the option is omitted.
+
+Each scan declares its family from sample count and the scale range before
+intensities are tested. The Bonferroni limit applies within that scan under
+the raw Gaussian and rotation assumptions. A window with zero or other
+nonpositive intensities remains in the denominator. A nonaffine m/z grid
+is reported as `unsupportedAxis`. The grid check allows float storage
+rounding of one ULP relative to the affine line through the scan endpoints.
+The reported covariance is conditional on that calibration and the chosen
+fit. The rotation budget must resolve the largest tested scan family.

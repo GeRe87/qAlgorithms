@@ -5,6 +5,7 @@
 #include "qalgorithms_qpeaks.h"
 #include "qalgorithms_peak_module.h"
 #include "qalgorithms_peak_search.h"
+#include "qalgorithms_peak_workflow.h"
 #include "qalgorithms_read_file.h"
 
 #include <cstdio>
@@ -211,6 +212,12 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         {
             processFoldingSpectra(inputFile, selectedIndices, retentionTimes,
                                   args.outputPath, filename, args);
+            ++processedPolarities;
+            continue;
+        }
+        if (args.calibratedPeaks)
+        {
+            processCalibratedSpectra(inputFile, selectedIndices, retentionTimes, filename, args);
             ++processedPolarities;
             continue;
         }
