@@ -33,13 +33,6 @@ namespace qAlgorithms
             double lowerConfidenceBound = std::numeric_limits<double>::quiet_NaN();
         };
 
-        struct PeakCandidateValidation
-        {
-            PeakGeometryValidation geometry;
-            PeakValidationStatus formConfidence = PeakValidationStatus::notEvaluated;
-            PeakWindowCoverage windowCoverage{PeakValidationStatus::notEvaluated};
-        };
-
         // Form uses shape coefficients alone. Quadratic mixed tails refer to
         // the clipped peak span; a flat or rising flank at b1=0 has no strict apex.
         bool hasPeakShape(const RegCoeffs &coefficients);
@@ -63,15 +56,6 @@ namespace qAlgorithms
         PeakValidationStatus validatePeakFormConfidence(const HyperbolicModel::Fit &fit, size_t trace,
             const HyperbolicModel::Geometry &geometry, double logMse, size_t residualDf, double alpha = .05);
 
-        // Run the common ordered stages, stopping at the first non-pass.
-        // Coverage is evaluated when a minimum is explicitly supplied.
-        PeakCandidateValidation validatePeakCandidate(const RegCoeffs &coefficients,
-            const PeakFormNoise &noise, size_t minimumSamplesPerSide = 2,
-            std::optional<double> minimumCoverage = std::nullopt);
-        PeakCandidateValidation validatePeakCandidate(const HyperbolicModel::Fit &fit, size_t trace,
-            const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise,
-            size_t minimumSamplesPerSide = 2, std::optional<double> minimumCoverage = std::nullopt);
-
         // Fraction of fitted area between the first and last sample. The
         // quadratic denominator uses the legacy peak domain (positive
         // curvature flanks end at their continuous valley). Hyperbolic uses
@@ -84,6 +68,49 @@ namespace qAlgorithms
             const PeakFormNoise &noise, double minimumFraction);
         PeakWindowCoverage validatePeakWindowCoverage(const HyperbolicModel::Fit &fit, size_t trace,
             const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise, double minimumFraction);
+
+        struct PeakAreaEvidence
+        {
+            PeakValidationStatus status = PeakValidationStatus::unavailable;
+            bool shapeCertified = false;
+            double logLowerBound = std::numeric_limits<double>::quiet_NaN();
+            double left = std::numeric_limits<double>::quiet_NaN();
+            double right = std::numeric_limits<double>::quiet_NaN();
+        };
+
+        // Test area of exp(E[log intensity]) against an explicit positive minimum, in
+        // intensity * sample index (quadratic) or intensity * u (hyperbolic).
+        // The lower bound integrates only within the observed window and the
+        // certified peak domain. A valid but uncertified shape fails with a
+        // zero area bound (logLowerBound = -infinity).
+        // Supply ORIGINAL log-OLS coefficients, before raw amplitude refit,
+        // and their same-window residual variance and DF. This fixed-window,
+        // per-trace test assumes independent homoskedastic Gaussian log errors
+        // and a prespecified model/window/threshold. The target is the modeled
+        // curve, without arithmetic-mean bias correction or background subtraction.
+        PeakAreaEvidence validatePeakAreaEvidence(const RegCoeffs &coefficients,
+            const PeakFormNoise &noise, double minimumArea);
+        PeakAreaEvidence validatePeakAreaEvidence(const HyperbolicModel::Fit &fit, size_t trace,
+            const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise, double minimumArea);
+
+        struct PeakCandidateValidation
+        {
+            PeakGeometryValidation geometry;
+            PeakValidationStatus formConfidence = PeakValidationStatus::notEvaluated;
+            PeakWindowCoverage windowCoverage{PeakValidationStatus::notEvaluated};
+            PeakAreaEvidence areaEvidence{PeakValidationStatus::notEvaluated};
+        };
+
+        // Run the common ordered stages, stopping at the first non-pass.
+        // The area evidence and subsequent coverage stages run only when
+        // their respective minimum is explicitly supplied.
+        PeakCandidateValidation validatePeakCandidate(const RegCoeffs &coefficients,
+            const PeakFormNoise &noise, size_t minimumSamplesPerSide = 2,
+            std::optional<double> minimumCoverage = std::nullopt, std::optional<double> minimumArea = std::nullopt);
+        PeakCandidateValidation validatePeakCandidate(const HyperbolicModel::Fit &fit, size_t trace,
+            const HyperbolicModel::Geometry &geometry, const PeakFormNoise &noise,
+            size_t minimumSamplesPerSide = 2, std::optional<double> minimumCoverage = std::nullopt,
+            std::optional<double> minimumArea = std::nullopt);
 
         struct PeakBackgroundOptions
         {
