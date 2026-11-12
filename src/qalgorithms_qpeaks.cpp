@@ -2104,12 +2104,7 @@ namespace qAlgorithms
         // test regression validity without depending on b0 or the degrees of freedom
         const bool valley_left = coeffs->b2 >= 0;
         const bool valley_right = coeffs->b3 >= 0;
-        const bool apexLeft = coeffs->b1 < 0;
-
-        // the peak must have a maximum
-        bool noApex = (valley_left && apexLeft) ||
-                      (valley_right && (!apexLeft));
-        if (noApex)
+        if (!LegacyModel::hasLegacyPeakShape(*coeffs))
             return {0, 0};
 
         Span_i32 span = {0, 0};

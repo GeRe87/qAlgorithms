@@ -101,6 +101,12 @@ namespace qAlgorithms
         template<> struct Model<PeakModelKind::PiecewiseQuadratic>
         {
             using Coefficients = RegCoeffs;
+            // Historical form space, including a clipped non-apex flank.
+            static bool hasLegacyPeakShape(const Coefficients &c)
+            {
+                const bool apexLeft = c.b1 < 0;
+                return !((c.b2 >= 0 && apexLeft) || (c.b3 >= 0 && !apexLeft));
+            }
             static void runningFit(const float *, size_t, std::vector<Coefficients> *);
             static double logValue(const Coefficients *, double);
             static double refitAmplitude(const float *, Span_i32, float *, Coefficients *);
