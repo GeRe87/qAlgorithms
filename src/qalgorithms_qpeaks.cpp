@@ -2425,23 +2425,28 @@ namespace qAlgorithms
         return (float)weighted_mean;
     };
 
-    static FeaturePeak peakToFeat(const RegressionGauss *peak, const EIC *eic, uint32_t eic_ID)
+    static FeaturePeak peakToFeat(const RegressionGauss *peak, const EIC *eic, uint32_t eic_ID,
+        const ChromatogramMass *mass)
     {
         const size_t start = peak->span.startIdx;
         const float *area_arr = eic->ints_area.data() + start;
-        const float *mz_arr = eic->mz.data() + start;
-        const float *dqsc_arr = eic->DQSC.data() + start;
         const float *rt_arr = eic->RT.data() + start;
 
         float DQSB = -1; // = weightedMeanAndVariance_EIC(area_arr, dqsb_arr, peak->length, nullptr);
-        float DQSC = weightedMeanAndVariance_EIC(area_arr, dqsc_arr, peak->span.length, nullptr);
-        assert(DQSC > 0);
-        assert(DQSC <= 1);
+        float DQSC = -1;
+        if (!eic->DQSC.empty())
+        {
+            DQSC = weightedMeanAndVariance_EIC(area_arr, eic->DQSC.data() + start, peak->span.length, nullptr);
+            assert(DQSC > 0 && DQSC <= 1);
+        }
 
         float mz_uncert = 0;
-        float mz = weightedMeanAndVariance_EIC(area_arr, mz_arr, peak->span.length, &mz_uncert);
-        assert(mz > 10);
-        assert(mz_uncert >= 0);
+        const float mz = mass ? mass->mz :
+            weightedMeanAndVariance_EIC(area_arr, eic->mz.data() + start, peak->span.length, &mz_uncert);
+        if (mass)
+            mz_uncert = mass->uncertainty;
+        assert(mz > 0);
+        assert(mass || mz_uncert >= 0);
 
         return {
             peak->coeffs,
@@ -2466,8 +2471,10 @@ namespace qAlgorithms
 
     size_t findFeatures(const std::vector<EIC> *EICs,
                         const std::vector<float> * /*convertRT*/,
-                        std::vector<FeaturePeak> *res)
+                        std::vector<FeaturePeak> *res, const std::vector<ChromatogramMass> *masses)
     {
+        if (masses && masses->size() != EICs->size())
+            throw std::invalid_argument("Chromatogram mass count does not match EIC count");
         std::vector<RegressionGauss> peaks;
 
         // the only relevant change here is that the start point of the x axis (RT) depends on the first scan in an EIC
@@ -2492,7 +2499,7 @@ namespace qAlgorithms
                 throw std::runtime_error("Feature detection rejected EIC " + std::to_string(eic_ID) + ".");
             for (size_t peak = 0; peak < peaks.size(); peak++)
             {
-                FeaturePeak feat = peakToFeat(&peaks[peak], bin, eic_ID);
+                FeaturePeak feat = peakToFeat(&peaks[peak], bin, eic_ID, masses ? &masses->at(eic_ID) : nullptr);
                 for (const auto &group : unresolvedGroups)
                     if (group.resultIndex == peak)
                     {

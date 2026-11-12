@@ -317,9 +317,15 @@ namespace qAlgorithms
 
     // ### Feature-specific Code ### //
 
+    struct ChromatogramMass
+    {
+        float mz, uncertainty;
+    };
+
     size_t findFeatures(const std::vector<EIC> *EICs,
                         const std::vector<float> *convertRT, // correct RT corresponding to every scan number
-                        std::vector<FeaturePeak> *res);
+                        std::vector<FeaturePeak> *res,
+                        const std::vector<ChromatogramMass> *masses = nullptr);
 
 #define GLOBAL_MINSCALE 2
 #define MINLENGTH 5
