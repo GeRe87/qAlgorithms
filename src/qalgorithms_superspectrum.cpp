@@ -616,7 +616,8 @@ namespace qAlgorithms
             std::vector<size_t> trackIds;
             std::vector<ChromatogramMass> masses;
 
-            void append(const std::vector<uint32_t> &indices, size_t id, double mz,
+            void append(const std::vector<uint32_t> &indices, const std::vector<float> &retentionTimes,
+                size_t id, double mz,
                 std::optional<double> spread, const std::map<uint32_t, SuperspectrumTrackHeight> &heights)
             {
                 auto scan = indices.begin();
@@ -627,13 +628,21 @@ namespace qAlgorithms
                         throw std::runtime_error("Superspectrum track references an unknown profile scan");
                     auto end = std::next(first);
                     auto nextScan = std::next(scan);
-                    while (end != heights.end() && nextScan != indices.end() && end->first == *nextScan)
+                    size_t measured = 1;
+                    while (end != heights.end() && nextScan != indices.end())
                     {
+                        if (end->first != *nextScan)
+                        {
+                            if (std::next(nextScan) == indices.end() || end->first != *std::next(nextScan))
+                                break;
+                            ++nextScan;
+                        }
                         ++end;
                         ++nextScan;
+                        ++measured;
                     }
                     const auto length = static_cast<size_t>(nextScan - scan);
-                    if (length >= MINLENGTH)
+                    if (measured >= MINLENGTH)
                     {
                         if (length > UINT16_MAX)
                             throw std::runtime_error("Superspectrum chromatogram exceeds the qPeaks sample limit");
@@ -646,16 +655,34 @@ namespace qAlgorithms
                         bin.DQSC.clear();
                         bin.df.clear();
                         bin.mz.clear();
-                        for (auto point = first; point != end; ++point)
+                        auto point = first;
+                        uint16_t count = 0;
+                        for (auto index = scan; index != nextScan; ++index)
                         {
-                            const auto &measurement = point->second.measurement;
-                            if (measurement.height > std::numeric_limits<float>::max())
+                            const float rt = retentionTimes.at(index - indices.begin());
+                            double height;
+                            if (*index == point->first)
+                            {
+                                height = point->second.measurement.height;
+                                ++point;
+                                ++count;
+                            }
+                            else
+                            {
+                                const auto &left = std::prev(point)->second.measurement;
+                                const auto &right = point->second.measurement;
+                                const double fraction = (double(rt) - left.retentionTime) /
+                                    (double(right.retentionTime) - left.retentionTime);
+                                height = std::exp((1 - fraction) * std::log(left.height) +
+                                    fraction * std::log(right.height));
+                            }
+                            if (height > std::numeric_limits<float>::max())
                                 throw std::runtime_error("Superspectrum height exceeds the qPeaks intensity range");
-                            bin.scanNumbers.push_back(point->first);
-                            bin.RT.push_back(measurement.retentionTime);
+                            bin.scanNumbers.push_back(*index);
+                            bin.RT.push_back(rt);
                             // findFeatures uses ints_area as the chromatogram signal.
-                            bin.ints_area.push_back(static_cast<float>(measurement.height));
-                            bin.df.push_back(static_cast<uint16_t>(bin.df.size() + 1));
+                            bin.ints_area.push_back(static_cast<float>(height));
+                            bin.df.push_back(count);
                         }
                         bins.push_back(std::move(bin));
                         trackIds.push_back(id);
@@ -721,7 +748,7 @@ namespace qAlgorithms
             SuperspectrumTracks tracks(trackCsv, scansPerWindow,
                 [&](size_t id, double mz, std::optional<double> spread, const auto &heights)
                 {
-                    chromatograms.append(indices, id, mz, spread, heights);
+                    chromatograms.append(indices, retentionTimes, id, mz, spread, heights);
                 });
             std::deque<ProfileScan> scans;
             for (size_t i = 0; grid.fallback.gridStep > 0 && i < indices.size(); ++i)

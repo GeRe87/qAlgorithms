@@ -223,7 +223,11 @@ overlapping windows, which share profile data.
 The same run writes `*_superspectrum_features.csv` and
 `*_superspectrum_unresolved_groups.csv` using the regular qPeaks feature
 detector and unresolved-group reporting. Each track supplies its deduplicated
-scan heights as a chromatogram. Missing selected scans split the trace.
+scan heights as a chromatogram. An isolated missing selected scan is
+filled log-linearly between measured heights in the same track, using
+the actual retention time. Longer gaps split the trace. The filled
+sample contributes to the fit signal but adds no measured point to
+the minimum count or regression test degrees of freedom.
 Each fitted segment needs at least five measured points. The feature's
 `track` column links to the input heights. Its m/z and m/z spread come from
 that track. A missing spread is written as `nan`. Centroid-level DQSC is
@@ -233,5 +237,6 @@ Both area columns are in intensity times seconds. `area` and
 `areaUncertainty` use the regular qPeaks fitted peak and its local
 retention-time step at the apex. `areaObserved` integrates the measured
 heights with the trapezoid rule over their actual time intervals within
-the feature bounds. The modeled area can include tails outside these
+the feature bounds, using only measured endpoints. `interpolatedScans`
+counts filled points inside those bounds. The modeled area can include tails outside these
 bounds and uses a single time step even if the scan times vary.

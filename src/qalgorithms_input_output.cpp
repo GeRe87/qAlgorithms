@@ -981,7 +981,7 @@ namespace qAlgorithms
         if (massFits)
             output << ",mzJoint,mzJointStdError,mzJointScans,mzJointPoints";
         if (trackIds)
-            output << ",track,areaObserved";
+            output << ",track,areaObserved,interpolatedScans";
         output << '\n';
         std::stringstream unresolvedOutput;
         unresolvedOutput << "featureID,binID,maximumNumber,retentionTime,reason\n" << std::setprecision(9);
@@ -1023,13 +1023,24 @@ namespace qAlgorithms
                 const size_t first = peak.idxPeakStart;
                 const size_t end = first + peak.length;
                 double observedArea = 0;
-                for (size_t j = first + 1; j < end; ++j)
+                size_t previous = end, interpolated = 0;
+                for (size_t j = first; j < end; ++j)
                 {
-                    const double width = static_cast<double>(bin.RT.at(j)) - bin.RT.at(j - 1);
-                    observedArea += width * (static_cast<double>(bin.ints_area.at(j)) + bin.ints_area.at(j - 1)) / 2;
+                    if (j && bin.df.at(j) == bin.df.at(j - 1))
+                    {
+                        ++interpolated;
+                        continue;
+                    }
+                    if (previous != end)
+                    {
+                        const double width = static_cast<double>(bin.RT.at(j)) - bin.RT.at(previous);
+                        observedArea += width * (static_cast<double>(bin.ints_area.at(j)) +
+                            bin.ints_area.at(previous)) / 2;
+                    }
+                    previous = j;
                 }
                 output << ',' << trackIds->at(binID) << ',' << std::setprecision(std::numeric_limits<double>::max_digits10)
-                       << observedArea;
+                       << observedArea << ',' << interpolated;
             }
             output << '\n';
             for (size_t j = 0; j < peak.unresolvedMaximaRT.size(); ++j)
