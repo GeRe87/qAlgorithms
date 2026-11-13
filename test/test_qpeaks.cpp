@@ -606,6 +606,16 @@ static void test_exact_log_fit_allows_zero_residual()
     assert(calcRSS_log(&reg, logPeak) == 0, "An exact log fit has zero residual", NULL);
     assert(f_testRegression(logPeak, 0, reg.span), "Exact peak must improve on a non-exact line", NULL);
     assert(!f_testRegression(logLine, 0, reg.span), "An exact line cannot justify extra parameters", NULL);
+    const float signal[] = {float(std::exp(4.0)), float(std::exp(7.0)), float(std::exp(8.0)),
+                            float(std::exp(7.0)), float(std::exp(4.0))};
+    const float time[] = {0, 1, 2, 3, 4};
+    const uint16_t measured[] = {1, 2, 3, 3, 4};
+    std::vector<RegressionGauss> detected;
+    assert(qpeaks_find(signal, time, nullptr, 5, &detected) == 1,
+           "Five measured samples support the peak", NULL);
+    detected.clear();
+    assert(qpeaks_find(signal, time, measured, 5, &detected) == 0,
+           "Four measured samples and one filled sample do not support a peak", NULL);
     assert(!insignificantCoefficient(&reg.coeffs, 0, 1), "Nonzero curvature with zero residual remains defined", NULL);
     reg.coeffs.b2 = reg.coeffs.b3 = 0;
     assert(insignificantCoefficient(&reg.coeffs, 0, 1), "Zero curvature does not define a peak", NULL);

@@ -70,6 +70,32 @@ def check_chromatographic_areas(host, root):
         observed = sum((b[0] - a[0]) * (a[1] + b[1]) / 2 for a, b in zip(measured, measured[1:]))
         assert math.isclose(float(feature["areaObserved"]), observed, rel_tol=1e-7)
 
+    tree = ET.parse(source)
+    spectra = tree.find(f".//{{{NS}}}spectrumList")
+    missing = 25
+    spectrum = spectra[missing]
+    spectrum.set("defaultArrayLength", "0")
+    spectrum.remove(spectrum.find(f"{{{NS}}}binaryDataArrayList"))
+    tree.write(source, encoding="utf-8", xml_declaration=True)
+    output = root / "gaussian-gap"
+    run_program(host, source, output, expect_success=True, option=None,
+                extra_arguments=("--superspectrum",))
+    with (output / "gaussian_superspectrum_features.csv").open(newline="") as stream:
+        bridged = [row for row in csv.DictReader(stream) if int(row["interpolatedScans"])]
+    with (output / "gaussian_superspectrum_tracks.csv").open(newline="") as stream:
+        heights = list(csv.DictReader(stream))
+    assert bridged and all(row["scan"] != str(missing) for row in heights)
+    for feature in bridged:
+        assert feature["interpolatedScans"] == "1"
+        lower = float(feature["lowestRetentionTime"])
+        upper = float(feature["highestRetentionTime"])
+        measured = [(float(row["retentionTimeSeconds"]), float(row["height"])) for row in heights
+                    if row["track"] == feature["track"] and
+                    lower - 5e-5 <= float(row["retentionTimeSeconds"]) <= upper + 5e-5]
+        assert len(measured) >= 5
+        observed = sum((b[0] - a[0]) * (a[1] + b[1]) / 2 for a, b in zip(measured, measured[1:]))
+        assert math.isclose(float(feature["areaObserved"]), observed, rel_tol=1e-7)
+
 
 def main(host):
     with tempfile.TemporaryDirectory() as directory:

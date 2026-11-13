@@ -2172,7 +2172,8 @@ namespace qAlgorithms
     /// @param RSS_reg previously calculated residual sum of squares of the complex model. Hard assumpion of four coefficients.
     /// @param range range of the regression.
     /// @return true: Regression is significant; false: Regression is not better than either alternative.
-    static bool f_testRegression(const float *intensities_log, double RSS_reg, const Span_i32 range);
+    static bool f_testRegression(const float *intensities_log, double RSS_reg, const Span_i32 range,
+        size_t measured = 0);
 
     /// @brief Assign the regression area, height, uncertaincies and similar. further, statistical
     /// tests are used to determine if the given regression is a valid peak description
@@ -2242,7 +2243,7 @@ namespace qAlgorithms
         fit, even very low intensity signals should be accounted for. The test here has a hard-coded
         alpha of 0.05
         */
-        bool f_ok = f_testRegression(intensities_log, RSS_log, regSpan);
+        bool f_ok = f_testRegression(intensities_log, RSS_log, regSpan, df_sum + 4);
         if (!f_ok)
         {
             return f_test_fail; // H0 holds, the two distributions are not noticeably different
@@ -2328,11 +2329,12 @@ namespace qAlgorithms
         return RSS;
     }
 
-    bool f_testRegression(const float *intensities_log, double RSS_reg_log, const Span_i32 range)
+    bool f_testRegression(const float *intensities_log, double RSS_reg_log, const Span_i32 range,
+        size_t measured)
     {
         // during the tests, the RSS for the regression has already been calculated in calcRSS_log
         assert(RSS_reg_log >= 0);
-        const size_t length = range.length;
+        const size_t length = measured ? measured : range.length;
         /*
             The following code was initially intended to speed up the f test by performing a simple
             calculation first and then skipping if the result is invalid. Obviously, it is actually
