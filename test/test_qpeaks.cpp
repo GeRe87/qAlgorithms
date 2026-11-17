@@ -628,6 +628,16 @@ struct WrappedQuadraticKernel
     struct Coefficients { RegCoeffs value; };
     struct Result : RegressionGauss { Coefficients coeffs; };
     static constexpr size_t parameterCount = LegacyModel::parameterCount;
+    static bool supportsMeasuredCount(size_t measured, Span_i32 span)
+    { return LegacyModel::supportsMeasuredCount(measured, span); }
+    static constexpr bool omitUnsupportedApexGroups = LegacyModel::omitUnsupportedApexGroups;
+    static Span_i32 similaritySpan(Span_i32 span, size_t length) { return LegacyModel::similaritySpan(span, length); }
+    static bool measure(Result &result, const float *raw, const float *logs, size_t length, double mse, double step)
+    {
+        auto &base = static_cast<RegressionGauss &>(result);
+        base.coeffs = result.coeffs.value;
+        return LegacyModel::measure(base, raw, logs, length, mse, step);
+    }
 
     static void runningFit(const float *log, size_t length, std::vector<Coefficients> *output)
     {
@@ -648,12 +658,6 @@ struct WrappedQuadraticKernel
     static bool insignificantCurvature(const Coefficients *c, double mse, size_t df)
     { return LegacyModel::insignificantCurvature(&c->value, mse, df); }
     static double width(const Coefficients *c, double h, double step) { return LegacyModel::width(&c->value, h, step); }
-    static double integral(const Coefficients *c, double step, double mse, double *u)
-    { return LegacyModel::integral(&c->value, step, mse, u); }
-    static double positionUncertainty(const Coefficients *c, double mse)
-    { return LegacyModel::positionUncertainty(&c->value, mse); }
-    static double heightUncertainty(const Coefficients *c, double mse)
-    { return LegacyModel::heightUncertainty(&c->value, mse); }
 };
 
 static void test_single_trace_kernel_contract()
@@ -670,6 +674,32 @@ static void test_single_trace_kernel_contract()
     auto result = static_cast<RegressionGauss>(wrapped.front());
     result.coeffs = wrapped.front().coeffs.value;
     assert(same_peak_description(result, legacy.front()), "Wrapped kernel must produce the same peak", NULL);
+}
+
+static void test_hyperbolic_single_trace_search()
+{
+    constexpr size_t length = 41;
+    constexpr double position = 100.4;
+    const PeakFitOptions options{PeakModelKind::Hyperbolic};
+    std::vector<float> axis(length), signal(length);
+    for (size_t i = 0; i < length; ++i)
+    {
+        axis[i] = static_cast<float>(100 + .02 * i);
+        const double u = (double(i) - 20) * hyperbolicSingleTraceStep;
+        signal[i] = static_cast<float>(std::exp(8.0 - 1.5 * std::cosh(u) + .008 * std::sin(i * 1.7)));
+    }
+    std::vector<RegressionGauss> fits;
+    assert(qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, options) == 1,
+           "The regular search must detect the synthetic hyperbolic peak", NULL);
+    const auto &fit = fits.front();
+    assert(std::abs(fit.position - position) < .01 && std::abs(fit.height / std::exp(6.5) - 1) < .03 &&
+           fit.area > 0 && fit.fwhm > 0 && fit.area_unc > 0 && fit.position_unc > 0 &&
+           fit.coeffs.b2 > std::abs(fit.coeffs.b3),
+           "Hyperbolic properties must use the supplied measurement axis and finite uncertainties", NULL);
+    std::fill(signal.begin(), signal.end(), 20);
+    fits.clear();
+    assert(qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, options) == 0,
+           "The hyperbolic search must reject a flat signal", NULL);
 }
 
 static void test_three_mandatory_groups_inside_two_resolution_intervals()
@@ -1835,6 +1865,7 @@ int main(int argc, const char *argv[])
     test_peak_height_uncertainty_matches_independent_propagation();
     test_exact_log_fit_allows_zero_residual();
     test_single_trace_kernel_contract();
+    test_hyperbolic_single_trace_search();
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
     test_three_mandatory_groups_inside_two_resolution_intervals();

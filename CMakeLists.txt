@@ -199,6 +199,10 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_mzml_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")
     set_tests_properties(test_mzml_cli PROPERTIES TIMEOUT 120)
+    add_test(NAME test_single_trace_kernel_cli
+        COMMAND "${Python3_EXECUTABLE}" -B "${TESTS_DIR}/integration/test_single_trace_kernel_cli.py"
+                "$<TARGET_FILE:qAlgorithms>")
+    set_tests_properties(test_single_trace_kernel_cli PROPERTIES TIMEOUT 120)
     add_test(NAME test_calibrated_peaks_cli
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_calibrated_peaks_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")

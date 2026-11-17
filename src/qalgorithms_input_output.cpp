@@ -64,6 +64,7 @@ namespace qAlgorithms
         "                                   in addition to the final peak table. The file ends in _bins.csv.\n"
         "      -pf, --printfeatures         Print the feature list as csv.\n"
         "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
+        "      --peak-model quadratic|hyperbolic : Kernel for regular single-trace peak detection.\n"
         "      --superspectrum              : Detect LC features from joint MS1 centroids and their tracks.\n"
         "      --superspectrum-fixed GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
         "                                   Run the same fit with explicit settings for comparison.\n"
@@ -246,6 +247,18 @@ namespace qAlgorithms
             else if (argument == "--peak-folding")
             {
                 args.peakFolding = true;
+            }
+            else if (argument == "--peak-model")
+            {
+                if (++i == argc)
+                    throw std::invalid_argument("--peak-model requires quadratic or hyperbolic");
+                const std::string_view model = argv[i];
+                if (model == "quadratic")
+                    args.singleTraceFit.model = PeakModelKind::PiecewiseQuadratic;
+                else if (model == "hyperbolic")
+                    args.singleTraceFit.model = PeakModelKind::Hyperbolic;
+                else
+                    throw std::invalid_argument("Unknown single-trace peak model");
             }
             else if (argument == "--superspectrum")
             {
@@ -602,6 +615,13 @@ namespace qAlgorithms
             args.printComponentRegs || args.printComponentBins))
         {
             (void)fprintf(stderr, "Error: --fifo-feature-mz requires standard feature CSV output (-o, optionally --printfeatures).\n");
+            goodInputs = false;
+        }
+        if (args.singleTraceFit.model == PeakModelKind::Hyperbolic &&
+            (args.superspectrum || args.peakFolding || args.calibratedPeaks || args.fifoFeatureMz ||
+             args.printCentroidsMZML || args.printComponentBins || args.printComponentRegs))
+        {
+            (void)fprintf(stderr, "Error: --peak-model hyperbolic requires the regular single-trace CSV workflow.\n");
             goodInputs = false;
         }
         if (args.superspectrum && (args.outputPath.empty() || args.peakFolding || args.calibratedPeaks

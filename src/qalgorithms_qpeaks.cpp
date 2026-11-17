@@ -4,6 +4,7 @@
 #include "qalgorithms_read_file.h"
 #include "qalgorithms_utils.h"
 #include "detail/qalgorithms_peak_candidates.h"
+#include "detail/qalgorithms_single_trace_hyperbolic.h"
 
 #include "libcerf_reduced.h"
 
@@ -154,21 +155,6 @@ namespace qAlgorithms
     static inline double peakPosition(const RegCoeffs *c);
 
 
-    int32_t qpeaks_find(const float *intensity, const float *x, const uint16_t *df,
-        size_t length, std::vector<RegressionGauss> *result,
-        const PeakFitOptions &options, std::vector<UnresolvedPeak> *groups)
-    {
-        switch (options.model)
-        {
-        case PeakModelKind::PiecewiseQuadratic:
-            return qpeaks_find(intensity, x, df, length, result, groups);
-        case PeakModelKind::Hyperbolic:
-            throw std::invalid_argument("Hyperbolic peak model is unsupported in production during Stage A");
-        default:
-            throw std::invalid_argument("Unknown peak model");
-        }
-    }
-
     namespace peak_model
     {
         PeakProperties fromLegacy(const RegressionGauss &r, AxisUnit units)
@@ -315,6 +301,53 @@ namespace qAlgorithms
         return findPeaksWithUnresolvedPolicy(intensity, x, df, length, result, unresolvedGroups, nullptr);
     }
 
+    static int32_t findSingleTracePeaks(const float *intensity, const float *x, const uint16_t *df,
+        size_t length, std::vector<RegressionGauss> *result, PeakFitOptions options,
+        std::vector<UnresolvedPeak> *groups, size_t *omitted)
+    {
+        switch (options.model)
+        {
+        case PeakModelKind::PiecewiseQuadratic:
+            return findPeaksWithUnresolvedPolicy(intensity, x, df, length, result, groups, omitted);
+        case PeakModelKind::Hyperbolic:
+        {
+            if (!intensity || !x || !result)
+                return -1;
+            for (size_t i = 0; i < length; ++i)
+                if (!std::isfinite(intensity[i]) || !std::isfinite(x[i]) ||
+                    (i && !(x[i] > x[i - 1])))
+                    throw std::invalid_argument("Hyperbolic search requires finite intensities and a strictly increasing axis");
+            std::vector<detail::SingleTraceHyperbolic::Result> fits;
+            std::vector<UnresolvedPeak> descriptions;
+            const int32_t status = findPeaksWithUnresolvedPolicy<detail::SingleTraceHyperbolic>(
+                intensity, x, df, length, &fits, groups ? &descriptions : nullptr, omitted);
+            if (status < 0)
+                return status;
+            if (groups)
+                for (auto &group : descriptions)
+                {
+                    group.resultIndex += result->size();
+                    groups->push_back(std::move(group));
+                }
+            for (const auto &fit : fits)
+            {
+                auto peak = static_cast<RegressionGauss>(fit);
+                peak.coeffs = fit.coeffs.values;
+                result->push_back(peak);
+            }
+            return static_cast<int32_t>(result->size());
+        }
+        }
+        throw std::invalid_argument("Unknown peak model");
+    }
+
+    int32_t qpeaks_find(const float *intensity, const float *x, const uint16_t *df,
+        size_t length, std::vector<RegressionGauss> *result,
+        const PeakFitOptions &options, std::vector<UnresolvedPeak> *groups)
+    {
+        return findSingleTracePeaks(intensity, x, df, length, result, options, groups, nullptr);
+    }
+
 #pragma region "running regression"
 
     static Span_i32 calcRegSpan(const RegCoeffs *coeffs);
@@ -327,6 +360,17 @@ namespace qAlgorithms
     bool LegacyModel::insignificantCurvature(const Coefficients *coeffs, double mse, size_t df)
     {
         return insignificantCoefficient(coeffs, mse, df);
+    }
+
+    bool LegacyModel::measure(Result &result, const float *, const float *, size_t, double mse, double step)
+    {
+        const auto *coeffs = &result.coeffs;
+        result.position_unc = (float)positionUncertainty(coeffs, mse);
+        result.height_unc = (float)heightUncertainty(coeffs, mse);
+        double uncertainty = -1;
+        result.area = (float)integral(coeffs, step, mse, &uncertainty);
+        result.area_unc = (float)uncertainty;
+        return true;
     }
 
     template<class Kernel = LegacyModel>
@@ -355,7 +399,7 @@ namespace qAlgorithms
                 return false;
 
             size_t df_sum = sumOfCumulative(degreesOfFreedom_cum, span.startIdx, span.length);
-            if (df_sum < MINLENGTH || df_sum <= Kernel::parameterCount)
+            if (df_sum < MINLENGTH || df_sum <= Kernel::parameterCount || !Kernel::supportsMeasuredCount(df_sum, span))
                 return false;
 
             df_sum -= Kernel::parameterCount;
@@ -573,8 +617,21 @@ namespace qAlgorithms
         for (size_t group = 0; group < conflictingGroups.size(); ++group)
         {
             if (conflictingGroups[group] && !supportedGroups[group])
-                throw std::runtime_error("An overlapping apex group has no observed maximum supported by a valid fit.");
+            {
+                if constexpr (!Kernel::omitUnsupportedApexGroups)
+                    throw std::runtime_error("An overlapping apex group has no observed maximum supported by a valid fit.");
+                if (omittedComponents)
+                    ++*omittedComponents;
+            }
         }
+        if constexpr (Kernel::omitUnsupportedApexGroups)
+            if (maxima.empty())
+                return;
+
+        auto canExpandCollective = [&](size_t group)
+        {
+            return conflictingGroups[group] && (!Kernel::omitUnsupportedApexGroups || supportedGroups[group]);
+        };
 
         std::sort(maxima.begin(), maxima.end(), [](const ObservedMaximum &a, const ObservedMaximum &b)
                   { return a.first < b.first; });
@@ -1011,7 +1068,7 @@ namespace qAlgorithms
                         eligible[i] = true;
                 if (expansionReason[component])
                     for (size_t i = 0; i < count; ++i)
-                        eligible[i] = !initiallySelected[i] && conflictingGroups[(size_t)apexGroups[i]];
+                        eligible[i] = !initiallySelected[i] && canExpandCollective((size_t)apexGroups[i]);
                 std::vector<size_t> globalProtected;
                 if (expansionReason[component])
                     for (size_t i = 0; i < count; ++i)
@@ -1090,7 +1147,7 @@ namespace qAlgorithms
                     for (size_t i = 0; i < count; ++i)
                     {
                         const auto &reg = validRegressions->at(i);
-                        if (initiallySelected[i] || !conflictingGroups[(size_t)apexGroups[i]] ||
+                        if (initiallySelected[i] || !canExpandCollective((size_t)apexGroups[i]) ||
                             reg.span.startIdx > (int32_t)left || reg.span.endIdx() < (int32_t)right)
                             continue;
                         bool protectedCompatible = true;
@@ -2280,19 +2337,13 @@ namespace qAlgorithms
 
         // uncertainty calculation and t-tests against peak properties
 
-        float uncert_position = (float)Kernel::positionUncertainty(coeffs, mse_log);
-        mutateReg->position_unc = uncert_position;
-        float uncert_height = (float)Kernel::heightUncertainty(coeffs, mse_log);
-        mutateReg->height_unc = uncert_height;
-
         const float absolutePosition = (float)Kernel::center(*coeffs) + position;
         if (!std::isfinite(absolutePosition) || absolutePosition < 0 || absolutePosition + 1 >= length)
             return invalid_apex;
         size_t leftOfApex = (size_t)absolutePosition;
         float delta_x = x_axis[leftOfApex + 1] - x_axis[leftOfApex];
-        double uncertainty = -1;
-        mutateReg->area = (float)Kernel::integral(coeffs, delta_x, mse_log, &uncertainty);
-        mutateReg->area_unc = (float)uncertainty;
+        if (!Kernel::measure(*mutateReg, intensities, intensities_log, length, mse_log, delta_x))
+            return invalid_area;
 
         // Area has intensity * axis units. A fixed numeric cutoff here changes
         // peak acceptance when the same axis is expressed in different units.
@@ -2305,7 +2356,9 @@ namespace qAlgorithms
 
         mutateReg->df = df_sum;
         mutateReg->position = (float)Kernel::center(*coeffs) + position;
-        mutateReg->jaccard = (float)calcJaccardIdx(intensities, predict, length);
+        const Span_i32 similarity = Kernel::similaritySpan(regSpan, length);
+        mutateReg->jaccard = (float)calcJaccardIdx(intensities + similarity.startIdx,
+                                                  predict + similarity.startIdx, similarity.length);
         mutateReg->height = (float)exp(Kernel::logValue(coeffs, Kernel::apex(coeffs)));
         assert(mutateReg->position > 1);
 
@@ -2529,7 +2582,7 @@ namespace qAlgorithms
 
     size_t findFeatures(const std::vector<EIC> *EICs,
                         const std::vector<float> * /*convertRT*/,
-                        std::vector<FeaturePeak> *res, const std::vector<ChromatogramMass> *masses)
+                        std::vector<FeaturePeak> *res, const std::vector<ChromatogramMass> *masses, PeakFitOptions options)
     {
         if (masses && masses->size() != EICs->size())
             throw std::invalid_argument("Chromatogram mass count does not match EIC count");
@@ -2547,7 +2600,7 @@ namespace qAlgorithms
             std::vector<UnresolvedPeak> unresolvedGroups;
             try
             {
-                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks, &unresolvedGroups);
+                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks, options, &unresolvedGroups);
             }
             catch (const std::exception &error)
             {
@@ -2610,7 +2663,7 @@ namespace qAlgorithms
 
     size_t findCentroids(const XML_File *data,
                          const std::vector<uint32_t> *selectedIndices,
-                         std::vector<CentroidPeak> *centroids)
+                         std::vector<CentroidPeak> *centroids, PeakFitOptions options)
     {
         assert(!data->defective);
         assert(centroids->empty());
@@ -2642,8 +2695,8 @@ namespace qAlgorithms
             size_t omittedComponents = 0;
             try
             {
-                peaksFound = findPeaksWithUnresolvedPolicy(spectrum_int.data(), spectrum_mz.data(), nullptr,
-                    spectrum_int.size(), &ret, nullptr, &omittedComponents);
+                peaksFound = findSingleTracePeaks(spectrum_int.data(), spectrum_mz.data(), nullptr,
+                    spectrum_int.size(), &ret, options, nullptr, &omittedComponents);
             }
             catch (const std::exception &error)
             {

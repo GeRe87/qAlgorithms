@@ -21,7 +21,10 @@ int main(int argc, char **) {
    // Exact field serialization below is also applied to explicit results.
    for(size_t i=0;i<r.size();++i) { auto a=peak_model::fromLegacy(r[i],peak_model::AxisUnit::MassToCharge); auto b=peak_model::fromLegacy(explicitResult[i],peak_model::AxisUnit::MassToCharge); if(r[i].coeffs.b0!=explicitResult[i].coeffs.b0||r[i].coeffs.b1!=explicitResult[i].coeffs.b1||r[i].coeffs.b2!=explicitResult[i].coeffs.b2||r[i].coeffs.b3!=explicitResult[i].coeffs.b3||r[i].coeffs.x0!=explicitResult[i].coeffs.x0||r[i].coeffs.scale!=explicitResult[i].coeffs.scale||r[i].span.startIdx!=explicitResult[i].span.startIdx||r[i].span.length!=explicitResult[i].span.length||r[i].jaccard!=explicitResult[i].jaccard||r[i].dqs!=explicitResult[i].dqs||r[i].df!=explicitResult[i].df||r[i].numCompetitors!=explicitResult[i].numCompetitors||r[i].apexGroup!=explicitResult[i].apexGroup||a.position!=b.position||a.area!=b.area||a.height!=b.height||a.width!=b.width||a.positionUncertainty!=b.positionUncertainty||a.areaUncertainty!=b.areaUncertainty||a.heightUncertainty!=b.heightUncertainty||a.valid!=b.valid) return 3; }
    if(groups.size()!=eg.size()) return 5; for(size_t i=0;i<groups.size();++i) if(groups[i].resultIndex!=eg[i].resultIndex||groups[i].reason!=eg[i].reason||groups[i].start!=eg[i].start||groups[i].end!=eg[i].end||groups[i].maximaIndices!=eg[i].maximaIndices) return 6;
-   for(auto kind:{PeakModelKind::Hyperbolic,static_cast<PeakModelKind>(99)}) { auto before=r.size(); bool threw=false; try {qpeaks_find(nullptr,nullptr,nullptr,0,&r,PeakFitOptions{kind},&groups);} catch(const std::invalid_argument &) {threw=true;} if(!threw||r.size()!=before) return 4; }
+   auto before=r.size(); bool threw=false;
+   try {qpeaks_find(nullptr,nullptr,nullptr,0,&r,PeakFitOptions{static_cast<PeakModelKind>(99)},&groups);}
+   catch(const std::invalid_argument &) {threw=true;}
+   if(!threw || r.size()!=before) return 4;
 #endif
    std::cout<<count<<' '<<groups.size()<<'\n';
    for(auto &v:r) { coeff(v.coeffs); std::cout<<v.span.startIdx<<' '<<v.span.length<<' '<<v.area<<' '<<v.position<<' '<<v.height<<' '<<v.area_unc<<' '<<v.position_unc<<' '<<v.height_unc<<' '<<v.fwhm<<' '<<v.jaccard<<' '<<v.dqs<<' '<<v.df<<' '<<int(v.numCompetitors)<<' '<<int(v.apexGroup)<<' '<<v.isValid<<'\n'; }

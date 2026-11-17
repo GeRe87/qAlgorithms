@@ -1,12 +1,31 @@
 # Native peak-model modules
 
-The regular single-trace qPeaks search uses a compile-time kernel contract
-defined by `peak_model::Model` in `qalgorithms_qpeaks.h`. A kernel supplies
+The regular single-trace qPeaks search uses the same compile-time contract for
+`peak_model::Model<PeakModelKind::PiecewiseQuadratic>` and
+`detail::SingleTraceHyperbolic`. A kernel supplies
 its coefficient and result types, the running fit, the supported span
 and apex, the log profile, the amplitude correction and the peak property
 calculations. The search owns segmentation, statistical test order,
 conflict resolution and conversion from sample indices to the measurement
-axis. The regular entry point instantiates the piecewise quadratic kernel.
+axis. The default is the piecewise quadratic kernel.
+
+Use `qAlgorithms -i input.mzML -o output --peak-model hyperbolic` to select
+the hyperbolic kernel for regular MS1 centroiding and chromatographic
+feature detection. `--peak-model quadratic` selects the default explicitly.
+The overload of `qpeaks_find` taking `PeakFitOptions` exposes the same
+selection. Hyperbolic CSVs use the `_hyperbolic` filename suffix. In these
+results `b0,b1,b2,b3` store `a,b,C,D` for
+`log I(u) = a + b*u - C*cosh(u) - D*sinh(u)`.
+
+The hyperbolic adapter uses the existing research step of 0.35 in
+dimensionless u per sample and caps the half-width at the geometry cache
+limit. It fits in sample coordinates, then uses the local supplied axis
+interval at the apex for width and area, as in regular qPeaks. It requires
+fully measured windows for its fixed-window covariance. The curvature check
+and the comparison against a linear log-intensity baseline use nominal
+per-window thresholds. A conflicting group without a supported observed
+maximum is discarded.
+The reported uncertainties are conditional on the selected window.
 
 The runtime modules below use the separate calibrated search path.
 
@@ -18,6 +37,7 @@ its callbacks. The descriptor supplies the model name.
 
 ## Source layout
 
+- `qalgorithms_single_trace_hyperbolic.cpp` adapts the hyperbolic regression and its uncertainty calculation to the regular single-trace search.
 - `qalgorithms_peak_module.cpp` owns the library handle and adapts the native fit to the qPeaks validation code.
 - `detail/qalgorithms_peak_cascade.h` orders the shared validation stages.
 - `qalgorithms_peak_background.cpp` compares raw backgrounds and replays the same model fit on rotated observations.

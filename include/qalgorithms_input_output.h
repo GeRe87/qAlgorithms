@@ -4,6 +4,7 @@
 #include "qalgorithms_datatypes.h"
 #include "qalgorithms_logging.h"
 #include "qalgorithms_superspectrum.h"
+#include "qalgorithms_qpeaks.h"
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -79,6 +80,7 @@ namespace qAlgorithms
         bool superspectrum = false;
         std::optional<SuperspectrumSettings> fixedSuperspectrum;
         bool fifoFeatureMz = false;
+        PeakFitOptions singleTraceFit;
 
         // progress reporting
         bool silent = false;

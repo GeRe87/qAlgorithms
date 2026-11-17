@@ -198,6 +198,8 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         std::string filename = pathSource.stem().string();
         if (inputFile.polarityMode == Polarities::mixed)
             filename += polarity == Polarities::positive ? "_positive" : "_negative";
+        if (args.singleTraceFit.model == PeakModelKind::Hyperbolic)
+            filename += "_hyperbolic";
         if (!args.outputPath.empty() && !outputNames.insert(outputKey(filename)).second)
             throw std::runtime_error("Two inputs would write the same output filename. Process them into separate directories.");
         if (!args.silent)
@@ -239,7 +241,7 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         }
 
         std::vector<CentroidPeak> centroids;
-        findCentroids(&inputFile, &selectedIndices, &centroids);
+        findCentroids(&inputFile, &selectedIndices, &centroids, args.singleTraceFit);
         if (!args.silent)
         {
             printf("    Centroiding complete: %zu centroids\n", centroids.size());
@@ -270,7 +272,7 @@ static void processFile(const std::filesystem::path &pathSource, const UserInput
         }
 
         std::vector<FeaturePeak> features;
-        findFeatures(&bins, &retentionTimes, &features);
+        findFeatures(&bins, &retentionTimes, &features, nullptr, args.singleTraceFit);
         std::vector<std::optional<SharedMassFit>> massFits;
         if (args.fifoFeatureMz)
         {

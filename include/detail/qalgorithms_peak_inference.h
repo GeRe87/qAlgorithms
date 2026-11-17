@@ -1,7 +1,7 @@
 #ifndef QALGORITHMS_DETAIL_PEAK_INFERENCE_H
 #define QALGORITHMS_DETAIL_PEAK_INFERENCE_H
 
-#include "qalgorithms_peak_inference.h"
+#include "../qalgorithms_peak_inference.h"
 
 namespace qAlgorithms
 {

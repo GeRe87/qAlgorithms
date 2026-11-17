@@ -59,7 +59,7 @@ using PeakFitView = std::variant<const SharedShapeRegCoeffs*,
 using PeakFitVisitor = std::function<void(const PeakFitView &)>;
 // Validate all finite log samples before any callback. No acceptance, postfit,
 // Bessel evaluation, or per-window allocation in this streaming diagnostics API.
-// qpeaks_find(Hyperbolic) remains unsupported until statistical gates exist.
+// The regular single-trace search is exposed separately through qpeaks_find.
 void forEachPeakFit(const PeakFitRequest &, const PeakFitVisitor &);
 }
 #endif

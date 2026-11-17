@@ -75,8 +75,10 @@ namespace qAlgorithms
         PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
     };
 
-    // Selection is checked before input processing or result mutation.
-    // Hyperbolic (and unknown enum values) throw std::invalid_argument in Stage A.
+    // The selected model determines the interpretation of result coefficients.
+    // Hyperbolic stores a, b, C, D in b0, b1, b2, b3 respectively.
+    // Its fixed sample-coordinate step is hyperbolicSingleTraceStep.
+    inline constexpr double hyperbolicSingleTraceStep = 0.35;
     int32_t qpeaks_find(const float *intensity, const float *x,
         const uint16_t *df, size_t length, std::vector<RegressionGauss> *result,
         const PeakFitOptions &options, std::vector<UnresolvedPeak> *groups = nullptr);
@@ -109,6 +111,10 @@ namespace qAlgorithms
             static size_t halfWidth(const Coefficients &c) { return c.scale; }
             static Span_i32 regressionSpan(const Coefficients *);
             static bool insignificantCurvature(const Coefficients *, double mse, size_t df);
+            static bool supportsMeasuredCount(size_t, Span_i32) { return true; }
+            static constexpr bool omitUnsupportedApexGroups = false;
+            static Span_i32 similaritySpan(Span_i32, size_t length) { return {0, int32_t(length)}; }
+            static bool measure(Result &, const float *, const float *, size_t, double mse, double step);
             // Historical form space, including a clipped non-apex flank.
             static bool hasLegacyPeakShape(const Coefficients &c)
             {
@@ -133,7 +139,7 @@ namespace qAlgorithms
     struct XML_File;                           // forward declaration so at least the header does not couple with read_file
     size_t findCentroids(const XML_File *data, // @todo the internal file representation should be more generic
                          const std::vector<uint32_t> *selectedIndices,
-                         std::vector<CentroidPeak> *centroids);
+                         std::vector<CentroidPeak> *centroids, PeakFitOptions options = {});
 
     void centroids_to_mzml(const std::filesystem::path *pathSource);
 
@@ -333,7 +339,7 @@ namespace qAlgorithms
     size_t findFeatures(const std::vector<EIC> *EICs,
                         const std::vector<float> *convertRT, // correct RT corresponding to every scan number
                         std::vector<FeaturePeak> *res,
-                        const std::vector<ChromatogramMass> *masses = nullptr);
+                        const std::vector<ChromatogramMass> *masses = nullptr, PeakFitOptions options = {});
 
 #define GLOBAL_MINSCALE 2
 #define MINLENGTH 5
