@@ -101,6 +101,14 @@ namespace qAlgorithms
         template<> struct Model<PeakModelKind::PiecewiseQuadratic>
         {
             using Coefficients = RegCoeffs;
+            using Result = RegressionGauss;
+            // Geometry is in sample indices. The framework maps results to
+            // the supplied measurement axis after selecting candidates.
+            static constexpr size_t parameterCount = 4;
+            static size_t center(const Coefficients &c) { return c.x0; }
+            static size_t halfWidth(const Coefficients &c) { return c.scale; }
+            static Span_i32 regressionSpan(const Coefficients *);
+            static bool insignificantCurvature(const Coefficients *, double mse, size_t df);
             // Historical form space, including a clipped non-apex flank.
             static bool hasLegacyPeakShape(const Coefficients &c)
             {

@@ -1,5 +1,15 @@
 # Native peak-model modules
 
+The regular single-trace qPeaks search uses a compile-time kernel contract
+defined by `peak_model::Model` in `qalgorithms_qpeaks.h`. A kernel supplies
+its coefficient and result types, the running fit, the supported span
+and apex, the log profile, the amplitude correction and the peak property
+calculations. The search owns segmentation, statistical test order,
+conflict resolution and conversion from sample indices to the measurement
+axis. The regular entry point instantiates the piecewise quadratic kernel.
+
+The runtime modules below use the separate calibrated search path.
+
 The host loads a separately built shared library from an explicit path.
 The library exports the C symbol `qalgorithms_peak_model_v1` and returns
 the descriptor defined in `include/qalgorithms_peak_model_abi.h`.

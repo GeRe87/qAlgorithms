@@ -36,15 +36,20 @@ namespace qAlgorithms
     // copy relevant values from regression struct to centroid struct - not all fields supported
     static inline CentroidPeak regToCen(const RegressionGauss *reg, uint32_t id, uint16_t specNum);
 
-    static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[]);
+    template<class Result>
+    static size_t groupRegsByApex(const std::vector<Result> *validRegressions, int16_t apexGroups[]);
 
+    template<class Result>
     static int32_t groupApexIsStable(
-        const std::vector<RegressionGauss> *validRegressions,
+        const std::vector<Result> *validRegressions,
         const int16_t apexGroups[],
         const int16_t groupNum);
 
+    using LegacyModel = peak_model::Model<PeakModelKind::PiecewiseQuadratic>;
+
+    template<class Kernel = LegacyModel>
     static size_t selectFromGroup(
-        const std::vector<RegressionGauss> *validRegressions,
+        const std::vector<typename Kernel::Result> *validRegressions,
         const float *intensities,
         const int16_t apexGroups[],
         const int16_t groupNum);
@@ -52,9 +57,10 @@ namespace qAlgorithms
     // For the compatibility predicate (disjoint windows OR separated apices
     // OR two protected fits), these five extremes contain a witness whenever
     // any option in the whole domain is compatible with a queried fit.
+    template<class Result>
     static std::array<size_t,5> compatibilityWitnesses(
         const std::vector<std::pair<double,size_t>> &options,
-        const std::vector<RegressionGauss> &fits,
+        const std::vector<Result> &fits,
         const std::vector<bool> &protectedFits)
     {
         assert(!options.empty());
@@ -74,8 +80,9 @@ namespace qAlgorithms
 
     constexpr size_t apexSearchBudget = 200000;
 
+    template<class Kernel = LegacyModel>
     static void resolveApexGroups(
-        std::vector<RegressionGauss> *validRegressions,
+        std::vector<typename Kernel::Result> *validRegressions,
         const float *intensities,
         const size_t length,
         const int16_t apexGroups[],
@@ -83,13 +90,14 @@ namespace qAlgorithms
         std::vector<UnresolvedPeak> *unresolvedGroups = nullptr,
         const size_t searchBudget = apexSearchBudget, size_t *omittedComponents = nullptr);
 
+    template<class Kernel = LegacyModel>
     static int32_t regression_on_continuum(
         const float *intensities,
         const float *x_axis,
         const float *intensities_log,
         const uint16_t *const df,
         const size_t length,
-        std::vector<RegressionGauss> *result,
+        std::vector<typename Kernel::Result> *result,
         std::vector<UnresolvedPeak> *unresolvedGroups = nullptr, size_t *omittedComponents = nullptr);
 
     /// @brief adjust the height of a regression to better fit the exponential data
@@ -109,6 +117,7 @@ namespace qAlgorithms
     /// @param intensities_log log of measured intensities - must have same length as intensities
     /// @param mutateReg regression that should be mutated by this function
     /// @return 0 if the regression is valid, otherwise the filter step which kicked it out
+    template<class Kernel = LegacyModel>
     static invalid calcRegressionProperties(
         const float *intensities,
         const float *intensities_log,
@@ -117,10 +126,12 @@ namespace qAlgorithms
         const size_t df_sum,
         const size_t length,
         const double RSS_log,
-        RegressionGauss *mutateReg);
+        typename Kernel::Result *mutateReg);
 
-    static void adjustRegression(RegressionGauss *reg, const float *x_values);
-    static double calcRSS_log(const RegressionGauss *mutateReg, const float *observed);
+    template<class Kernel = LegacyModel>
+    static void adjustRegression(typename Kernel::Result *reg, const float *x_values);
+    template<class Kernel = LegacyModel>
+    static double calcRSS_log(const typename Kernel::Result *mutateReg, const float *observed);
 
     // take a jacobian matrix as input and return the transpose at scale
     static double matProductReg(const double J[4], const size_t scale);
@@ -142,7 +153,6 @@ namespace qAlgorithms
 
     static inline double peakPosition(const RegCoeffs *c);
 
-    using LegacyModel = peak_model::Model<PeakModelKind::PiecewiseQuadratic>;
 
     int32_t qpeaks_find(const float *intensity, const float *x, const uint16_t *df,
         size_t length, std::vector<RegressionGauss> *result,
@@ -183,7 +193,8 @@ namespace qAlgorithms
 
     // -------------------------------------- //
 
-    static void adjustRegression(RegressionGauss *reg, const float *x_values)
+    template<class Kernel>
+    static void adjustRegression(typename Kernel::Result *reg, const float *x_values)
     {
         assert(reg->isValid);
 
@@ -195,18 +206,19 @@ namespace qAlgorithms
         reg->position = x_values[leftOfApex] + apexFraction;
         reg->position_unc *= delta_x;
 
-        reg->fwhm = (float)LegacyModel::width(&reg->coeffs, reg->height, delta_x);
+        reg->fwhm = (float)Kernel::width(&reg->coeffs, reg->height, delta_x);
 
         reg->dqs = erfc(reg->area_unc / reg->area);
     }
 
+    template<class Kernel = LegacyModel>
     static int32_t findPeaksWithUnresolvedPolicy(
         // SOME_IMPLEMENTATION_OF_LINEAR_ALLOCATOR_HERE
         const float *intensity_base,
         const float *x_values,
         const uint16_t *DF_cum,
         const size_t length,
-        std::vector<RegressionGauss> *result,
+        std::vector<typename Kernel::Result> *result,
         std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
     {
         // control input for nullpointers, mismatching x and y, and fitting maxscale
@@ -271,7 +283,7 @@ namespace qAlgorithms
 
                 const size_t previousResults = result->size();
                 const size_t previousGroups = unresolvedGroups ? unresolvedGroups->size() : 0;
-                const int32_t status = regression_on_continuum(intensities,
+                const int32_t status = regression_on_continuum<Kernel>(intensities,
                                         x_axis,
                                         intensities_log,
                                         df,
@@ -307,35 +319,46 @@ namespace qAlgorithms
 
     static Span_i32 calcRegSpan(const RegCoeffs *coeffs);
 
+    Span_i32 LegacyModel::regressionSpan(const Coefficients *coeffs)
+    {
+        return calcRegSpan(coeffs);
+    }
+
+    bool LegacyModel::insignificantCurvature(const Coefficients *coeffs, double mse, size_t df)
+    {
+        return insignificantCoefficient(coeffs, mse, df);
+    }
+
+    template<class Kernel = LegacyModel>
     static size_t validateRegressions(
         const float *intensities,
         const float *intensities_log,
         const float *x_axis,
         const uint16_t *const degreesOfFreedom_cum,
-        const std::vector<RegCoeffs> *coefficients,
+        const std::vector<typename Kernel::Coefficients> *coefficients,
         const size_t length,
-        std::vector<RegressionGauss> *validRegressions)
+        std::vector<typename Kernel::Result> *validRegressions)
     {
         size_t validCount = 0;
         std::vector<float> predict(length, 0);
-        detail::findValidRegressions<RegressionGauss>(*coefficients,
-            [&](const RegCoeffs &input, RegressionGauss *reg)
+        detail::findValidRegressions<typename Kernel::Result>(*coefficients,
+            [&](const typename Kernel::Coefficients &input, typename Kernel::Result *reg)
         {
-            const RegCoeffs *coeffs = &input;
+            const typename Kernel::Coefficients *coeffs = &input;
             // sets the range and checks for validity
-            Span_i32 span = calcRegSpan(coeffs);
+            Span_i32 span = Kernel::regressionSpan(coeffs);
             assert(span.startIdx >= 0);
             bool span_fail = (span.length < 5) || // this is redundant but kept for clarity
-                             (span.startIdx + 2 > (int32_t)coeffs->x0) ||
-                             (span.endIdx() - 2 < (int32_t)coeffs->x0);
+                             (span.startIdx + 2 > (int32_t)Kernel::center(*coeffs)) ||
+                             (span.endIdx() - 2 < (int32_t)Kernel::center(*coeffs));
             if (span_fail)
                 return false;
 
             size_t df_sum = sumOfCumulative(degreesOfFreedom_cum, span.startIdx, span.length);
-            if (df_sum < MINLENGTH)
+            if (df_sum < MINLENGTH || df_sum <= Kernel::parameterCount)
                 return false;
 
-            df_sum -= 4; // four coefficients, adjust for components
+            df_sum -= Kernel::parameterCount;
 
             reg->coeffs = *coeffs;
             reg->span = span;
@@ -352,10 +375,10 @@ namespace qAlgorithms
             // Statistical tests use the log-domain fit. The raw-intensity
             // height correction changes its intercept and is not a log-domain
             // least-squares estimate; do not use that correction as log noise.
-            const double RSS_log = calcRSS_log(reg, intensities_log);
-            LegacyModel::refitAmplitude(intensities, span, predict.data(), &reg->coeffs);
+            const double RSS_log = calcRSS_log<Kernel>(reg, intensities_log);
+            Kernel::refitAmplitude(intensities, span, predict.data(), &reg->coeffs);
 
-            invalid failpoint = calcRegressionProperties(
+            invalid failpoint = calcRegressionProperties<Kernel>(
                 intensities,
                 intensities_log,
                 x_axis,
@@ -365,7 +388,7 @@ namespace qAlgorithms
                 RSS_log,
                 reg);
             return failpoint == ok;
-        }, [&](const RegressionGauss &reg, bool valid)
+        }, [&](const typename Kernel::Result &reg, bool valid)
         {
             if (valid)
             {
@@ -382,24 +405,25 @@ namespace qAlgorithms
 
 #pragma region "Conflict Elimination"
 
+    template<class Kernel>
     static int32_t regression_on_continuum(
         const float *intensities,
         const float *x_axis,
         const float *intensities_log,
         const uint16_t *const df,
         const size_t length,
-        std::vector<RegressionGauss> *result,
+        std::vector<typename Kernel::Result> *result,
         std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
     {
 
         // coefficients for single-b0 peaks, spans all regressions over a peak window
         // all entries in coeff are sorted by scale and position in ascending order - this is not checked!
-        std::vector<RegCoeffs> coefficients;
-        LegacyModel::runningFit(intensities_log, length, &coefficients);
+        std::vector<typename Kernel::Coefficients> coefficients;
+        Kernel::runningFit(intensities_log, length, &coefficients);
 
-        std::vector<RegressionGauss> validRegressions; // all independently valid regressions regressions
+        std::vector<typename Kernel::Result> validRegressions; // all independently valid regressions regressions
         validRegressions.reserve(coefficients.size() / 2);
-        size_t validCount = validateRegressions(intensities,
+        size_t validCount = validateRegressions<Kernel>(intensities,
                                                 intensities_log,
                                                 x_axis,
                                                 df,
@@ -410,7 +434,7 @@ namespace qAlgorithms
             return 0;
         if (validCount == 1)
         {
-            RegressionGauss *reg = validRegressions.data();
+            typename Kernel::Result *reg = validRegressions.data();
 
             // When the data is very large, a singular regression should be viewed with suspicion.
             // The only exception is made for data which is fully covered by the
@@ -427,7 +451,7 @@ namespace qAlgorithms
             if (fullCoverage)
             {
                 reg->isValid = true;
-                adjustRegression(reg, x_axis);
+                adjustRegression<Kernel>(reg, x_axis);
                 result->push_back(*reg);
             }
             // if there is no full coverage, we must assume that the peak is just noise. There
@@ -452,7 +476,7 @@ namespace qAlgorithms
             if (stableApex == -1)
             {
                 // equivalent to only one possible apex being in the data, no complex deconvolution is required
-                size_t chosenOne = selectFromGroup(&validRegressions, intensities, apexGroups.data(), groupNum);
+                size_t chosenOne = selectFromGroup<Kernel>(&validRegressions, intensities, apexGroups.data(), groupNum);
                 validRegressions[chosenOne].isValid = true;
             }
             else
@@ -463,16 +487,16 @@ namespace qAlgorithms
         }
         std::vector<UnresolvedPeak> unresolvedCandidates;
         if (hasConflict)
-            resolveApexGroups(&validRegressions, intensities, length,
+            resolveApexGroups<Kernel>(&validRegressions, intensities, length,
                              apexGroups.data(), conflictingGroups,
                              unresolvedGroups ? &unresolvedCandidates : nullptr, apexSearchBudget, omittedComponents);
 
         for (size_t peak = 0; peak < validRegressions.size(); peak++)
         {
-            RegressionGauss *reg = validRegressions.data() + peak;
+            typename Kernel::Result *reg = validRegressions.data() + peak;
             if (reg->isValid)
             {
-                adjustRegression(reg, x_axis);
+                adjustRegression<Kernel>(reg, x_axis);
                 const size_t outputIndex = result->size();
                 result->push_back(*reg);
                 if (unresolvedGroups)
@@ -493,8 +517,9 @@ namespace qAlgorithms
     // Valleys bound only the common SSE comparison interval; they do not define
     // a new regression window. This selects peak descriptions, not quantitative
     // deconvolution of the overlapping signals.
+    template<class Kernel>
     static void resolveApexGroups(
-        std::vector<RegressionGauss> *validRegressions,
+        std::vector<typename Kernel::Result> *validRegressions,
         const float *intensities,
         const size_t length,
         const int16_t apexGroups[],
@@ -516,7 +541,7 @@ namespace qAlgorithms
 
         for (size_t i = 0; i < count; ++i)
         {
-            const RegressionGauss &reg = validRegressions->at(i);
+            const typename Kernel::Result &reg = validRegressions->at(i);
             const size_t group = (size_t)apexGroups[i];
             // Already selected stable representatives remain eligible unchanged.
             // Other candidates from a stable group are outside this refinement.
@@ -589,7 +614,7 @@ namespace qAlgorithms
                     const bool right = support[i] == (int32_t)maxima[k + 1].first;
                     if (!left && !right)
                         continue;
-                    const RegressionGauss &reg = validRegressions->at(i);
+                    const typename Kernel::Result &reg = validRegressions->at(i);
                     lowerApex = std::min(lowerApex, (double)reg.position);
                     upperApex = std::max(upperApex, (double)reg.position);
                     if (left)
@@ -697,11 +722,11 @@ namespace qAlgorithms
             size_t best = count;
             for (size_t i : candidates)
             {
-                const RegCoeffs &coeffs = validRegressions->at(i).coeffs;
+                const typename Kernel::Coefficients &coeffs = validRegressions->at(i).coeffs;
                 double sse = 0;
                 for (size_t p = limitLeft; p <= limitRight; ++p)
                 {
-                    const double prediction = std::exp(regAt(&coeffs, (double)p - (double)coeffs.x0));
+                    const double prediction = std::exp(Kernel::logValue(&coeffs, (double)p - (double)Kernel::center(coeffs)));
                     const double difference = (double)intensities[p] - prediction;
                     sse += difference * difference;
 
@@ -1013,7 +1038,7 @@ namespace qAlgorithms
                     double error = 0;
                     for (size_t p = left; p <= right; ++p)
                     {
-                        const double difference = intensities[p] - std::exp(regAt(&reg.coeffs, double(p)-reg.coeffs.x0));
+                        const double difference = intensities[p] - std::exp(Kernel::logValue(&reg.coeffs, double(p)-Kernel::center(reg.coeffs)));
                         error += difference*difference;
                     }
                     if (error < bestError) { bestError = error; representative = i; }
@@ -1157,7 +1182,8 @@ namespace qAlgorithms
             *omittedComponents += omitted;
     }
 
-    static size_t groupRegsByApex(const std::vector<RegressionGauss> *validRegressions, int16_t apexGroups[])
+    template<class Result>
+    static size_t groupRegsByApex(const std::vector<Result> *validRegressions, int16_t apexGroups[])
     {
         const size_t length = validRegressions->size();
         if (length == 0)
@@ -1186,12 +1212,12 @@ namespace qAlgorithms
             // using proximity and overlap from different candidates.
             for (size_t next = 0; next < pending.size(); ++next)
             {
-                const RegressionGauss &member = validRegressions->at(pending[next]);
+                const Result &member = validRegressions->at(pending[next]);
                 auto it = remaining.lower_bound({member.position - resolution, 0});
                 while (it != remaining.end() && it->first < member.position + resolution)
                 {
                     const size_t i = it->second;
-                    const RegressionGauss &candidate = validRegressions->at(i);
+                    const Result &candidate = validRegressions->at(i);
                     const bool overlap =
                         candidate.span.startIdx < member.span.startIdx + member.span.length &&
                         member.span.startIdx < candidate.span.startIdx + candidate.span.length;
@@ -1210,8 +1236,9 @@ namespace qAlgorithms
     }
 
     // function that asserts that all regressions within one grouping describe only one apex
+    template<class Result>
     static int32_t groupApexIsStable(
-        const std::vector<RegressionGauss> *validRegressions,
+        const std::vector<Result> *validRegressions,
         const int16_t apexGroups[],
         const int16_t groupNum)
     {
@@ -1228,7 +1255,7 @@ namespace qAlgorithms
         {
             if (apexGroups[i] != groupNum)
                 continue;
-            const RegressionGauss *reg = validRegressions->data() + i;
+            const Result *reg = validRegressions->data() + i;
             apex_lim_L = min(apex_lim_L, reg->position);
             apex_lim_R = max(apex_lim_R, reg->position);
 
@@ -1285,7 +1312,7 @@ namespace qAlgorithms
         {
             if (apexGroups[i] != groupNum)
                 continue;
-            const RegressionGauss *reg = validRegressions->data() + i;
+            const Result *reg = validRegressions->data() + i;
             if (reg->position == apex_lim_L)
             {
                 bound_reg_L_L = reg->span.startIdx;
@@ -1315,8 +1342,9 @@ namespace qAlgorithms
     }
 
     // return the index of the regression that was found to be the best group representative
+    template<class Kernel>
     static size_t selectFromGroup(
-        const std::vector<RegressionGauss> *validRegressions,
+        const std::vector<typename Kernel::Result> *validRegressions,
         const float *intensities,
         const int16_t apexGroups[],
         const int16_t groupNum)
@@ -1333,7 +1361,7 @@ namespace qAlgorithms
         {
             if (apexGroups[i] == groupNum)
             {
-                const RegressionGauss *reg = validRegressions->data() + i;
+                const typename Kernel::Result *reg = validRegressions->data() + i;
                 lim_L = min(reg->span.startIdx, lim_L);
                 lim_R = max(lim_R, reg->span.endIdx());
             }
@@ -1351,14 +1379,14 @@ namespace qAlgorithms
             if (apexGroups[i] != groupNum)
                 continue;
 
-            const RegressionGauss *reg = validRegressions->data() + i;
+            const typename Kernel::Result *reg = validRegressions->data() + i;
 
             double currentSSE = 0;
             for (size_t xval = lim_L; xval < (size_t)lim_R + 1; xval++)
             {
                 double observed = intensities[xval];
-                double x = double(xval) - (double)reg->coeffs.x0;
-                double predict = exp(regAt(&reg->coeffs, x));
+                double x = double(xval) - (double)Kernel::center(reg->coeffs);
+                double predict = exp(Kernel::logValue(&reg->coeffs, x));
                 double diff = observed - predict;
                 currentSSE += diff * diff;
 
@@ -2173,7 +2201,7 @@ namespace qAlgorithms
     /// @param range range of the regression.
     /// @return true: Regression is significant; false: Regression is not better than either alternative.
     static bool f_testRegression(const float *intensities_log, double RSS_reg, const Span_i32 range,
-        size_t measured = 0);
+        size_t measured = 0, size_t parameters = LegacyModel::parameterCount);
 
     /// @brief Assign the regression area, height, uncertaincies and similar. further, statistical
     /// tests are used to determine if the given regression is a valid peak description
@@ -2186,6 +2214,7 @@ namespace qAlgorithms
     /// @param mutateReg the regression being evaluated. It is only fully initialised if the
     /// function returns OK
     /// @return success or type of failure of the executed tests
+    template<class Kernel>
     static invalid calcRegressionProperties( // returns the number of the failed test
         const float *intensities,
         const float *intensities_log,
@@ -2194,24 +2223,24 @@ namespace qAlgorithms
         const size_t df_sum,
         const size_t length,
         const double RSS_log,
-        RegressionGauss *mutateReg)
+        typename Kernel::Result *mutateReg)
     {
         assert(!mutateReg->isValid);
-        const size_t scale = mutateReg->coeffs.scale;
-        const RegCoeffs *coeffs = &mutateReg->coeffs;
+        const size_t scale = Kernel::halfWidth(mutateReg->coeffs);
+        const typename Kernel::Coefficients *coeffs = &mutateReg->coeffs;
         const Span_i32 regSpan = mutateReg->span;
 
         assert(scale > 1);
-        assert(coeffs->x0 + scale < length);
+        assert(Kernel::center(*coeffs) + scale < length);
 
         // @todo new error correction here. Previous covariance matrix was mse (log) * (XtX)^-1,
         // multiply with matrix U, where first four terms are partial derivative of equation in
         // correctB0 by original coefficients
 
-        float position = (float)LegacyModel::apex(coeffs);
+        float position = (float)Kernel::apex(coeffs);
         // to prevent potential errors, reject those regressions which do not have the apex in the
         // regression window with at least one point tp the side.
-        if (!LegacyModel::apexHasSupport(position, coeffs))
+        if (!Kernel::apexHasSupport(position, coeffs))
         {
             return invalid_apex;
         }
@@ -2232,7 +2261,7 @@ namespace qAlgorithms
         // double mse_exp = RSS_exp / double(df_sum);
         double mse_log = RSS_log / double(df_sum);
 
-        bool badCoeff = insignificantCoefficient(coeffs, mse_log, df_sum);
+        bool badCoeff = Kernel::insignificantCurvature(coeffs, mse_log, df_sum);
         if (badCoeff)
         {
             return invalid::invalid_quadratic;
@@ -2243,7 +2272,7 @@ namespace qAlgorithms
         fit, even very low intensity signals should be accounted for. The test here has a hard-coded
         alpha of 0.05
         */
-        bool f_ok = f_testRegression(intensities_log, RSS_log, regSpan, df_sum + 4);
+        bool f_ok = f_testRegression(intensities_log, RSS_log, regSpan, df_sum + Kernel::parameterCount, Kernel::parameterCount);
         if (!f_ok)
         {
             return f_test_fail; // H0 holds, the two distributions are not noticeably different
@@ -2251,18 +2280,18 @@ namespace qAlgorithms
 
         // uncertainty calculation and t-tests against peak properties
 
-        float uncert_position = (float)LegacyModel::positionUncertainty(coeffs, mse_log);
+        float uncert_position = (float)Kernel::positionUncertainty(coeffs, mse_log);
         mutateReg->position_unc = uncert_position;
-        float uncert_height = (float)LegacyModel::heightUncertainty(coeffs, mse_log);
+        float uncert_height = (float)Kernel::heightUncertainty(coeffs, mse_log);
         mutateReg->height_unc = uncert_height;
 
-        const float absolutePosition = (float)coeffs->x0 + position;
+        const float absolutePosition = (float)Kernel::center(*coeffs) + position;
         if (!std::isfinite(absolutePosition) || absolutePosition < 0 || absolutePosition + 1 >= length)
             return invalid_apex;
         size_t leftOfApex = (size_t)absolutePosition;
         float delta_x = x_axis[leftOfApex + 1] - x_axis[leftOfApex];
         double uncertainty = -1;
-        mutateReg->area = (float)LegacyModel::integral(coeffs, delta_x, mse_log, &uncertainty);
+        mutateReg->area = (float)Kernel::integral(coeffs, delta_x, mse_log, &uncertainty);
         mutateReg->area_unc = (float)uncertainty;
 
         // Area has intensity * axis units. A fixed numeric cutoff here changes
@@ -2275,25 +2304,26 @@ namespace qAlgorithms
         // is correctness of the peak shape as a volume, not strictly the fitted curve
 
         mutateReg->df = df_sum;
-        mutateReg->position = (float)coeffs->x0 + position;
+        mutateReg->position = (float)Kernel::center(*coeffs) + position;
         mutateReg->jaccard = (float)calcJaccardIdx(intensities, predict, length);
-        mutateReg->height = (float)exp(regAt(coeffs, peakPosition(coeffs)));
+        mutateReg->height = (float)exp(Kernel::logValue(coeffs, Kernel::apex(coeffs)));
         assert(mutateReg->position > 1);
 
         mutateReg->isValid = false; // note: this field is only required later on for eliminating regressions
         return ok;
     }
 
-    double calcRSS_log(const RegressionGauss *mutateReg, const float *observed)
+    template<class Kernel>
+    double calcRSS_log(const typename Kernel::Result *mutateReg, const float *observed)
     {
         double RSS = 0;
         const size_t start = mutateReg->span.startIdx;
         const float *obs = observed + start;
-        double x = double(start) - double(mutateReg->coeffs.x0);
+        double x = double(start) - double(Kernel::center(mutateReg->coeffs));
         const size_t len = mutateReg->span.length;
         for (size_t i = 0; i < len; i++)
         {
-            double pred = regAt(&mutateReg->coeffs, x);
+            double pred = Kernel::logValue(&mutateReg->coeffs, x);
             double difference = obs[i] - pred;
             x += 1.0;
             RSS += difference * difference;
@@ -2330,7 +2360,7 @@ namespace qAlgorithms
     }
 
     bool f_testRegression(const float *intensities_log, double RSS_reg_log, const Span_i32 range,
-        size_t measured)
+        size_t measured, size_t parameters)
     {
         // during the tests, the RSS for the regression has already been calculated in calcRSS_log
         assert(RSS_reg_log >= 0);
@@ -2356,7 +2386,7 @@ namespace qAlgorithms
             return false;
         if (RSS_reg_log == 0)
             return true; // A perfect complex fit improves on a nonzero null residual.
-        bool f_ok = F_test_regs(RSS_reg_log, RSS_H0_cf2, 4, 2, length, 0.05);
+        bool f_ok = F_test_regs(RSS_reg_log, RSS_H0_cf2, parameters, 2, length, 0.05);
 
         return f_ok;
     }

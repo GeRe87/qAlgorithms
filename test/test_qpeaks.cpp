@@ -621,6 +621,57 @@ static void test_exact_log_fit_allows_zero_residual()
     assert(insignificantCoefficient(&reg.coeffs, 0, 1), "Zero curvature does not define a peak", NULL);
 }
 
+// Use the same mathematics with a different coefficient layout to check
+// that the search only accesses coefficients through the kernel.
+struct WrappedQuadraticKernel
+{
+    struct Coefficients { RegCoeffs value; };
+    struct Result : RegressionGauss { Coefficients coeffs; };
+    static constexpr size_t parameterCount = LegacyModel::parameterCount;
+
+    static void runningFit(const float *log, size_t length, std::vector<Coefficients> *output)
+    {
+        std::vector<RegCoeffs> fits;
+        LegacyModel::runningFit(log, length, &fits);
+        for (const auto &fit : fits)
+            output->push_back({fit});
+    }
+
+    static size_t center(const Coefficients &c) { return LegacyModel::center(c.value); }
+    static size_t halfWidth(const Coefficients &c) { return LegacyModel::halfWidth(c.value); }
+    static Span_i32 regressionSpan(const Coefficients *c) { return LegacyModel::regressionSpan(&c->value); }
+    static double logValue(const Coefficients *c, double x) { return LegacyModel::logValue(&c->value, x); }
+    static double refitAmplitude(const float *y, Span_i32 span, float *predicted, Coefficients *c)
+    { return LegacyModel::refitAmplitude(y, span, predicted, &c->value); }
+    static double apex(const Coefficients *c) { return LegacyModel::apex(&c->value); }
+    static bool apexHasSupport(float x, const Coefficients *c) { return LegacyModel::apexHasSupport(x, &c->value); }
+    static bool insignificantCurvature(const Coefficients *c, double mse, size_t df)
+    { return LegacyModel::insignificantCurvature(&c->value, mse, df); }
+    static double width(const Coefficients *c, double h, double step) { return LegacyModel::width(&c->value, h, step); }
+    static double integral(const Coefficients *c, double step, double mse, double *u)
+    { return LegacyModel::integral(&c->value, step, mse, u); }
+    static double positionUncertainty(const Coefficients *c, double mse)
+    { return LegacyModel::positionUncertainty(&c->value, mse); }
+    static double heightUncertainty(const Coefficients *c, double mse)
+    { return LegacyModel::heightUncertainty(&c->value, mse); }
+};
+
+static void test_single_trace_kernel_contract()
+{
+    const float time[] = {0, 1, 2, 3, 4};
+    const float signal[] = {float(std::exp(4.0)), float(std::exp(7.0)), float(std::exp(8.0)),
+                            float(std::exp(7.0)), float(std::exp(4.0))};
+    std::vector<RegressionGauss> legacy;
+    std::vector<WrappedQuadraticKernel::Result> wrapped;
+    assert(qpeaks_find(signal, time, nullptr, 5, &legacy) == 1, "Expected a single legacy peak", NULL);
+    assert(findPeaksWithUnresolvedPolicy<WrappedQuadraticKernel>(
+               signal, time, nullptr, 5, &wrapped, nullptr, nullptr) == 1,
+           "Single-trace search must accept a different coefficient layout", NULL);
+    auto result = static_cast<RegressionGauss>(wrapped.front());
+    result.coeffs = wrapped.front().coeffs.value;
+    assert(same_peak_description(result, legacy.front()), "Wrapped kernel must produce the same peak", NULL);
+}
+
 static void test_three_mandatory_groups_inside_two_resolution_intervals()
 {
     // Synthetic analogue of an observed EIC conflict; no private measurement
@@ -1783,6 +1834,7 @@ int main(int argc, const char *argv[])
     test_log_fit_acceptance_precedes_height_correction();
     test_peak_height_uncertainty_matches_independent_propagation();
     test_exact_log_fit_allows_zero_residual();
+    test_single_trace_kernel_contract();
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
     test_three_mandatory_groups_inside_two_resolution_intervals();
