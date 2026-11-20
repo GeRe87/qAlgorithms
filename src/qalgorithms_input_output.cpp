@@ -65,6 +65,7 @@ namespace qAlgorithms
         "      -pf, --printfeatures         Print the feature list as csv.\n"
         "      --fifo-feature-mz           : Add joint profile m/z and standard error to the feature CSV.\n"
         "      --peak-model quadratic|hyperbolic : Kernel for regular single-trace peak detection.\n"
+        "      --benchmark-mode            : Recover from logged peak conflicts in single-trace comparisons.\n"
         "      --superspectrum              : Detect LC features from joint MS1 centroids and their tracks.\n"
         "      --superspectrum-fixed GRID_STEP MAX_GAP MAX_HALF_WIDTH\n"
         "                                   Run the same fit with explicit settings for comparison.\n"
@@ -248,6 +249,8 @@ namespace qAlgorithms
             {
                 args.peakFolding = true;
             }
+            else if (argument == "--benchmark-mode")
+                args.singleTraceFit.benchmarkMode = true;
             else if (argument == "--peak-model")
             {
                 if (++i == argc)
@@ -622,6 +625,13 @@ namespace qAlgorithms
              args.printCentroidsMZML || args.printComponentBins || args.printComponentRegs))
         {
             (void)fprintf(stderr, "Error: --peak-model hyperbolic requires the regular single-trace CSV workflow.\n");
+            goodInputs = false;
+        }
+        if (args.singleTraceFit.benchmarkMode &&
+            (args.superspectrum || args.peakFolding || args.calibratedPeaks || args.fifoFeatureMz ||
+             args.printCentroidsMZML || args.printComponentBins || args.printComponentRegs))
+        {
+            (void)fprintf(stderr, "Error: --benchmark-mode requires the regular single-trace CSV workflow.\n");
             goodInputs = false;
         }
         if (args.superspectrum && (args.outputPath.empty() || args.peakFolding || args.calibratedPeaks

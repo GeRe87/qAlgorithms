@@ -73,6 +73,7 @@ namespace qAlgorithms
     struct PeakFitOptions
     {
         PeakModelKind model = PeakModelKind::PiecewiseQuadratic;
+        bool benchmarkMode = false;
     };
 
     // The selected model determines the interpretation of result coefficients.
@@ -140,6 +141,11 @@ namespace qAlgorithms
     size_t findCentroids(const XML_File *data, // @todo the internal file representation should be more generic
                          const std::vector<uint32_t> *selectedIndices,
                          std::vector<CentroidPeak> *centroids, PeakFitOptions options = {});
+
+    // Export one original profile span per centroid, in centroid-ID order.
+    size_t findCentroids(const XML_File *data, const std::vector<uint32_t> *selectedIndices,
+                         std::vector<CentroidPeak> *centroids, PeakFitOptions options,
+                         std::vector<Span_i32> *profileSpans);
 
     void centroids_to_mzml(const std::filesystem::path *pathSource);
 

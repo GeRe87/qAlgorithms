@@ -81,6 +81,11 @@ namespace qAlgorithms
 
     constexpr size_t apexSearchBudget = 200000;
 
+    struct ApexConflict : std::runtime_error
+    {
+        using std::runtime_error::runtime_error;
+    };
+
     template<class Kernel = LegacyModel>
     static void resolveApexGroups(
         std::vector<typename Kernel::Result> *validRegressions,
@@ -89,7 +94,8 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const std::vector<bool> &conflictingGroups,
         std::vector<UnresolvedPeak> *unresolvedGroups = nullptr,
-        const size_t searchBudget = apexSearchBudget, size_t *omittedComponents = nullptr);
+        const size_t searchBudget = apexSearchBudget, size_t *omittedComponents = nullptr,
+        bool omitUnsupportedGroups = false);
 
     template<class Kernel = LegacyModel>
     static int32_t regression_on_continuum(
@@ -99,7 +105,8 @@ namespace qAlgorithms
         const uint16_t *const df,
         const size_t length,
         std::vector<typename Kernel::Result> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr, size_t *omittedComponents = nullptr);
+        std::vector<UnresolvedPeak> *unresolvedGroups = nullptr, size_t *omittedComponents = nullptr,
+        bool omitUnsupportedGroups = false);
 
     /// @brief adjust the height of a regression to better fit the exponential data
     /// @param intensities non-logarithmic intensity values the regression was fitted to
@@ -205,7 +212,8 @@ namespace qAlgorithms
         const uint16_t *DF_cum,
         const size_t length,
         std::vector<typename Kernel::Result> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
+        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents,
+        bool omitUnsupportedGroups = false)
     {
         // control input for nullpointers, mismatching x and y, and fitting maxscale
         if (intensity_base == nullptr || x_values == nullptr || result == nullptr)
@@ -274,7 +282,7 @@ namespace qAlgorithms
                                         intensities_log,
                                         df,
                                         newLen,
-                                        result, unresolvedGroups, omittedComponents);
+                                        result, unresolvedGroups, omittedComponents, omitUnsupportedGroups);
                 if (status < 0)
                     return status;
                 for (size_t i = previousResults; i < result->size(); ++i)
@@ -308,15 +316,18 @@ namespace qAlgorithms
         switch (options.model)
         {
         case PeakModelKind::PiecewiseQuadratic:
-            return findPeaksWithUnresolvedPolicy(intensity, x, df, length, result, groups, omitted);
+            return findPeaksWithUnresolvedPolicy(intensity, x, df, length, result, groups, omitted,
+                                                 options.benchmarkMode && omitted != nullptr);
         case PeakModelKind::Hyperbolic:
         {
             if (!intensity || !x || !result)
                 return -1;
             for (size_t i = 0; i < length; ++i)
                 if (!std::isfinite(intensity[i]) || !std::isfinite(x[i]) ||
-                    (i && !(x[i] > x[i - 1])))
-                    throw std::invalid_argument("Hyperbolic search requires finite intensities and a strictly increasing axis");
+                    (i && (x[i] < x[i - 1] || (!options.benchmarkMode && x[i] == x[i - 1]))))
+                    throw std::invalid_argument(options.benchmarkMode ?
+                        "Hyperbolic benchmark search requires finite intensities and a nondecreasing axis" :
+                        "Hyperbolic search requires finite intensities and a strictly increasing axis");
             std::vector<detail::SingleTraceHyperbolic::Result> fits;
             std::vector<UnresolvedPeak> descriptions;
             const int32_t status = findPeaksWithUnresolvedPolicy<detail::SingleTraceHyperbolic>(
@@ -457,7 +468,8 @@ namespace qAlgorithms
         const uint16_t *const df,
         const size_t length,
         std::vector<typename Kernel::Result> *result,
-        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents)
+        std::vector<UnresolvedPeak> *unresolvedGroups, size_t *omittedComponents,
+        bool omitUnsupportedGroups)
     {
 
         // coefficients for single-b0 peaks, spans all regressions over a peak window
@@ -533,7 +545,8 @@ namespace qAlgorithms
         if (hasConflict)
             resolveApexGroups<Kernel>(&validRegressions, intensities, length,
                              apexGroups.data(), conflictingGroups,
-                             unresolvedGroups ? &unresolvedCandidates : nullptr, apexSearchBudget, omittedComponents);
+                             unresolvedGroups ? &unresolvedCandidates : nullptr, apexSearchBudget, omittedComponents,
+                             omitUnsupportedGroups);
 
         for (size_t peak = 0; peak < validRegressions.size(); peak++)
         {
@@ -569,7 +582,7 @@ namespace qAlgorithms
         const int16_t apexGroups[],
         const std::vector<bool> &conflictingGroups,
         std::vector<UnresolvedPeak> *unresolvedGroups,
-        const size_t searchBudget, size_t *omittedComponents)
+        const size_t searchBudget, size_t *omittedComponents, bool omitUnsupportedGroups)
     {
         struct SearchLimit final : std::runtime_error
         { SearchLimit() : std::runtime_error("Joint apex selection exceeded its explicit search limit.") {} };
@@ -614,23 +627,23 @@ namespace qAlgorithms
                 break;
             }
         }
+        const bool omitUnsupported = Kernel::omitUnsupportedApexGroups || omitUnsupportedGroups;
         for (size_t group = 0; group < conflictingGroups.size(); ++group)
         {
             if (conflictingGroups[group] && !supportedGroups[group])
             {
-                if constexpr (!Kernel::omitUnsupportedApexGroups)
-                    throw std::runtime_error("An overlapping apex group has no observed maximum supported by a valid fit.");
+                if (!omitUnsupported)
+                    throw ApexConflict("An overlapping apex group has no observed maximum supported by a valid fit.");
                 if (omittedComponents)
                     ++*omittedComponents;
             }
         }
-        if constexpr (Kernel::omitUnsupportedApexGroups)
-            if (maxima.empty())
-                return;
+        if (omitUnsupported && maxima.empty())
+            return;
 
         auto canExpandCollective = [&](size_t group)
         {
-            return conflictingGroups[group] && (!Kernel::omitUnsupportedApexGroups || supportedGroups[group]);
+            return conflictingGroups[group] && (!omitUnsupported || supportedGroups[group]);
         };
 
         std::sort(maxima.begin(), maxima.end(), [](const ObservedMaximum &a, const ObservedMaximum &b)
@@ -1032,7 +1045,7 @@ namespace qAlgorithms
                     for (const auto &option : choices[k])
                     {
                         if (initiallySelected[option.second])
-                            throw std::runtime_error("An unresolved description would replace a protected stable fit.");
+                            throw ApexConflict("An unresolved description would replace a protected stable fit.");
                         eligible[option.second] = true;
                         eligibleApexGroups[(size_t)apexGroups[option.second]] = true;
                     }
@@ -1053,7 +1066,7 @@ namespace qAlgorithms
                             break;
                         }
                 if (group.maximaIndices.size() < 2)
-                    throw std::runtime_error("No multi-maximum unresolved region can be represented.");
+                    throw ApexConflict("No multi-maximum unresolved region can be represented.");
                 // Cover the complete observed/apex hypothesis envelope, not
                 // unrelated tails in the union of alternative fit windows.
                 left = std::min(left, (size_t)std::floor(minimumApex));
@@ -1202,9 +1215,9 @@ namespace qAlgorithms
                             ambiguous = true;
                     }
                     if (best.roots.empty())
-                        throw std::runtime_error("No accepted fit covers the complete unresolved region with compatible protected neighbours.");
+                        throw ApexConflict("No accepted fit covers the complete unresolved region with compatible protected neighbours.");
                     if (ambiguous)
-                        throw std::runtime_error("Equally small collective expansions are ambiguous.");
+                        throw ApexConflict("Equally small collective expansions are ambiguous.");
                     uint8_t reason = group.reason;
                     for (size_t key : best.roots)
                         if (expansionReason[key] == UnresolvedPeak::Infeasible)
@@ -1230,7 +1243,7 @@ namespace qAlgorithms
         for (size_t i = 0; i < selected.size(); ++i)
             for (size_t j = i+1; j < selected.size(); ++j)
                 if (!compatible(selected[i], selected[j]))
-                    throw std::runtime_error("Selected collective descriptions conflict with a neighbouring fit.");
+                    throw ApexConflict("Selected collective descriptions conflict with a neighbouring fit.");
         for (auto &reg : *validRegressions)
             reg.isValid = false;
         for (size_t i : selected)
@@ -2600,7 +2613,23 @@ namespace qAlgorithms
             std::vector<UnresolvedPeak> unresolvedGroups;
             try
             {
-                status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks, options, &unresolvedGroups);
+                try
+                {
+                    status = qpeaks_find(bin->ints_area.data(), rt, bin->df.data(), binLen, &peaks, options, &unresolvedGroups);
+                }
+                catch (const ApexConflict &error)
+                {
+                    if (!options.benchmarkMode)
+                        throw;
+                    (void)fprintf(stderr, "Comparison retry for EIC %zu: %s\n", eic_ID, error.what());
+                    peaks.clear();
+                    unresolvedGroups.clear();
+                    size_t omitted = 0;
+                    status = findSingleTracePeaks(bin->ints_area.data(), rt, bin->df.data(), binLen,
+                                                   &peaks, options, nullptr, &omitted);
+                    (void)fprintf(stderr, "Comparison retry EIC %zu recovered %zu rows and omitted %zu components.\n",
+                                  eic_ID, peaks.size(), omitted);
+                }
             }
             catch (const std::exception &error)
             {
@@ -2661,12 +2690,20 @@ namespace qAlgorithms
         };
     }
 
+    size_t findCentroids(const XML_File *data, const std::vector<uint32_t> *selectedIndices,
+                         std::vector<CentroidPeak> *centroids, PeakFitOptions options)
+    {
+        return findCentroids(data, selectedIndices, centroids, options, nullptr);
+    }
+
     size_t findCentroids(const XML_File *data,
                          const std::vector<uint32_t> *selectedIndices,
-                         std::vector<CentroidPeak> *centroids, PeakFitOptions options)
+                         std::vector<CentroidPeak> *centroids, PeakFitOptions options,
+                         std::vector<Span_i32> *profileSpans)
     {
         assert(!data->defective);
         assert(centroids->empty());
+        assert(!profileSpans || profileSpans->empty());
         if (selectedIndices->size() > UINT16_MAX)
             throw std::runtime_error("More than 65535 MS1 profile scans per polarity are not supported in this working version.");
 
@@ -2716,6 +2753,8 @@ namespace qAlgorithms
                 if (id >= UINT32_MAX)
                     throw std::runtime_error("The centroid count exceeds the supported range.");
                 centroids->push_back(regToCen(peak, id, specNum));
+                if (profileSpans)
+                    profileSpans->push_back(peak->span);
             }
 
             spectrum_mz.clear();

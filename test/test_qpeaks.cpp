@@ -696,10 +696,44 @@ static void test_hyperbolic_single_trace_search()
            fit.area > 0 && fit.fwhm > 0 && fit.area_unc > 0 && fit.position_unc > 0 &&
            fit.coeffs.b2 > std::abs(fit.coeffs.b3),
            "Hyperbolic properties must use the supplied measurement axis and finite uncertainties", NULL);
+    axis[1] = axis[0]; // Equal float coordinates outside the peak support.
+    fits.clear();
+    bool rejectedEqualAxis = false;
+    try { qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, options); }
+    catch (const std::invalid_argument &) { rejectedEqualAxis = true; }
+    assert(rejectedEqualAxis, "The regular search requires strictly increasing coordinates", NULL);
+    const PeakFitOptions benchmark{PeakModelKind::Hyperbolic, true};
+    assert(qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, benchmark) == 1,
+           "The benchmark allows equal coordinates outside the peak support", NULL);
+    axis[1] = axis[0] - 1;
+    fits.clear();
+    bool rejectedDescendingAxis = false;
+    try { qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, benchmark); }
+    catch (const std::invalid_argument &) { rejectedDescendingAxis = true; }
+    assert(rejectedDescendingAxis, "The benchmark still rejects a descending axis", NULL);
+    axis[1] = axis[0] + .02F;
     std::fill(signal.begin(), signal.end(), 20);
     fits.clear();
     assert(qpeaks_find(signal.data(), axis.data(), nullptr, length, &fits, options) == 0,
            "The hyperbolic search must reject a flat signal", NULL);
+}
+
+static void test_benchmark_omits_unsupported_apex_group()
+{
+    const float intensity[] = {4, 4, 4, 4, 4, 4, 4};
+    const int16_t groups[] = {0, 0};
+    std::vector<RegressionGauss> candidates(2);
+    candidates[0].position = 2.5F;
+    candidates[1].position = 3.5F;
+    const std::vector<bool> conflicts{true};
+    bool rejected = false;
+    try { resolveApexGroups(&candidates, intensity, 7, groups, conflicts); }
+    catch (const ApexConflict &) { rejected = true; }
+    assert(rejected, "Regular search reports a conflict without an observed maximum", NULL);
+    size_t omitted = 0;
+    resolveApexGroups(&candidates, intensity, 7, groups, conflicts, nullptr, apexSearchBudget, &omitted, true);
+    assert(omitted == 1 && !candidates[0].isValid && !candidates[1].isValid,
+           "Benchmark recovery counts the unsupported group without accepting its candidates", NULL);
 }
 
 static void test_three_mandatory_groups_inside_two_resolution_intervals()
@@ -1866,6 +1900,7 @@ int main(int argc, const char *argv[])
     test_exact_log_fit_allows_zero_residual();
     test_single_trace_kernel_contract();
     test_hyperbolic_single_trace_search();
+    test_benchmark_omits_unsupported_apex_group();
     test_f_threshold_respects_significance_level();
     test_joint_search_propagates_constraints_without_dropping_groups();
     test_three_mandatory_groups_inside_two_resolution_intervals();

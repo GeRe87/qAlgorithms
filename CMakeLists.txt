@@ -160,6 +160,11 @@ else()
     target_link_libraries(qalgo_lib PUBLIC ZLIB::ZLIB)
 endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE qalgo_lib)
+add_executable(qmzml-profile tools/mzml_benchmark/profile.cpp)
+target_link_libraries(qmzml-profile PRIVATE qalgo_lib)
+if(MINGW)
+    target_link_options(qmzml-profile PRIVATE -municode)
+endif()
 
 # TESTS
 include(CTest)
@@ -203,6 +208,10 @@ if(Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" -B "${TESTS_DIR}/integration/test_single_trace_kernel_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")
     set_tests_properties(test_single_trace_kernel_cli PROPERTIES TIMEOUT 120)
+    add_test(NAME test_mzml_benchmark
+        COMMAND "${Python3_EXECUTABLE}" -B "${TESTS_DIR}/integration/test_mzml_benchmark.py"
+                "$<TARGET_FILE:qmzml-profile>" "$<TARGET_FILE:qAlgorithms>")
+    set_tests_properties(test_mzml_benchmark PROPERTIES TIMEOUT 120)
     add_test(NAME test_calibrated_peaks_cli
         COMMAND "${Python3_EXECUTABLE}" "${TESTS_DIR}/integration/test_calibrated_peaks_cli.py"
                 "$<TARGET_FILE:qAlgorithms>")
