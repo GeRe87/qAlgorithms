@@ -5,6 +5,9 @@
 > synthetic tests. Ambiguous real-data EICs and known legacy/grouping failures
 > remain unresolved; complete processing is not yet reliable. This is experimental.
 
+For controlled evaluation with synthetic profile mzML and known peak truth,
+see the [mzML benchmark tool](tools/mzml_benchmark/README.md).
+
 ## Usage Notice
 At this moment, `qAlgorithms` is provided purely for reasons of scientific transparency. There are
 still known flaws in the concrete implementation, and we are steadily working on finding a useful
